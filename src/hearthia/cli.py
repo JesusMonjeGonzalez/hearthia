@@ -366,7 +366,8 @@ def pull(
     s = Settings()
 
     async def run() -> None:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(None)) as client:
+        # follow_redirects: HF resolve/ 302s LFS files to its CDN
+        async with httpx.AsyncClient(timeout=httpx.Timeout(None), follow_redirects=True) as client:
             files = await list_gguf_files(client, repo)
             if not files:
                 typer.echo(f"no .gguf files found in {repo}")

@@ -80,18 +80,36 @@ async def download_file(
     sha = hashlib.sha256()
     total = 0
 
+    # resume: hash what's already on disk and ask for the rest
+    resume_from = 0
+    if tmp_path.exists():
+        with open(tmp_path, "rb") as f:
+            for chunk in iter(lambda: f.read(chunk_size), b""):
+                sha.update(chunk)
+                resume_from += len(chunk)
+        total = resume_from
+    headers = {"Range": f"bytes={resume_from}-"} if resume_from else {}
+
     try:
-        async with client.stream("GET", url) as r:
-            if r.status_code != 200:
+        async with client.stream("GET", url, headers=headers) as r:
+            if r.status_code == 200 and resume_from:
+                # server ignored the Range header — start over
+                sha = hashlib.sha256()
+                total = 0
+                mode = "wb"
+            elif r.status_code == 206:
+                mode = "ab"
+            elif r.status_code == 200:
+                mode = "wb"
+            else:
                 return {"ok": False, "bytes": 0, "sha256": "", "verified": False}
-            with open(tmp_path, "wb") as f:
+            with open(tmp_path, mode) as f:
                 async for chunk in r.aiter_bytes(chunk_size):
                     f.write(chunk)
                     sha.update(chunk)
                     total += len(chunk)
     except httpx.HTTPError:
-        if tmp_path.exists():
-            tmp_path.unlink()
+        # keep the partial .tmp — the next attempt resumes from it
         return {"ok": False, "bytes": total, "sha256": "", "verified": False}
 
     actual_sha = sha.hexdigest()

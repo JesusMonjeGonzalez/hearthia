@@ -12,6 +12,7 @@ from hearthia.library import (
 )
 
 HF_API = "https://huggingface.co/api"
+HF_RESOLVE = "https://huggingface.co"
 
 
 @respx.mock
@@ -193,3 +194,33 @@ def test_model_block_template_no_aliases():
     )
     assert "aliases" not in block
     assert "ttl: 600" in block
+
+
+@respx.mock
+async def test_download_resumes_partial_tmp(tmp_path):
+    """A .tmp left by an interrupted download resumes with a Range request."""
+    dest = tmp_path / "model.gguf"
+    tmp = tmp_path / "model.gguf.tmp"
+    tmp.write_bytes(b"hello ")  # first 6 bytes already on disk
+
+    route = respx.get(f"{HF_RESOLVE}/repo/x/resolve/main/model.gguf").respond(206, content=b"world")
+    full_sha = hashlib.sha256(b"hello world").hexdigest()
+    async with httpx.AsyncClient() as client:
+        result = await download_file(client, "repo/x", "model.gguf", dest, expected_sha256=full_sha)
+    assert result["ok"] is True
+    assert result["sha256"] == full_sha
+    assert dest.read_bytes() == b"hello world"
+    assert route.calls[0].request.headers["Range"] == "bytes=6-"
+
+
+@respx.mock
+async def test_download_restarts_when_server_ignores_range(tmp_path):
+    """A 200 to a Range request means no resume support — start over cleanly."""
+    dest = tmp_path / "model.gguf"
+    (tmp_path / "model.gguf.tmp").write_bytes(b"garbage")
+
+    respx.get(f"{HF_RESOLVE}/repo/x/resolve/main/model.gguf").respond(200, content=b"fresh")
+    async with httpx.AsyncClient() as client:
+        result = await download_file(client, "repo/x", "model.gguf", dest)
+    assert result["ok"] is True
+    assert dest.read_bytes() == b"fresh"
