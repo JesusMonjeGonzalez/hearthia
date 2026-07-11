@@ -71,7 +71,7 @@ function renderConv() {
 }
 
 function statsLine(t) {
-  if (!t?.predicted_per_second) return "";
+  if (!t?.predicted_per_second || t?.predicted_n == null) return "";
   return `⚡ ${t.predicted_per_second.toFixed(1)} tok/s · prefill ${Math.round(t.prompt_per_second)} t/s · ${t.predicted_n} tok`;
 }
 
