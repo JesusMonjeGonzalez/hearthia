@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM Stack — Control</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%230E1116'/><rect x='14' y='40' width='44' height='20' rx='4' fill='%23E8A33D'/><rect x='62' y='40' width='24' height='20' rx='4' fill='%23262D37'/></svg>">
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/vendor/hljs-theme.css">
+</head>
+<body>
+
+<header>
+  <div class="masthead">
+    <div class="brand">
+      <span class="brand-name">LLM STACK</span>
+      <span class="brand-sub">M4 Max · 36 GB unified</span>
+    </div>
+    <div class="endpoints">
+      <span id="swap-dot" class="dot"></span>
+      <code id="endpoint" title="OpenAI-compatible endpoint">http://localhost:9292/v1</code>
+      <button id="btn-unload-all" class="btn btn-quiet" title="Free all model memory now">Unload all</button>
+    </div>
+  </div>
+
+  <!-- Signature: the unified-memory map. Each loaded model is a real, measured segment. -->
+  <div class="memstrip" id="memstrip" role="img" aria-label="Unified memory map">
+    <div class="memstrip-track" id="memstrip-track"></div>
+    <div class="memstrip-wired" id="memstrip-wired" title="GPU-wired memory ceiling"><i></i><span id="wired-label"></span></div>
+    <div class="memstrip-scale">
+      <span>0</span><span id="mem-mid"></span><span id="mem-total"></span>
+    </div>
+  </div>
+
+  <div class="vitals">
+    <span class="vital"><label>models in RAM</label><b id="v-models">–</b></span>
+    <span class="vital"><label>memory used</label><b id="v-ram">–</b></span>
+    <span class="vital"><label>gen speed</label><b id="v-toks">–</b></span>
+    <span class="vital"><label>cpu</label><b id="v-cpu">–</b></span>
+    <span class="vital"><label>swap used</label><b id="v-swap">–</b></span>
+    <span class="vital"><label>disk free</label><b id="v-disk">–</b></span>
+  </div>
+
+  <nav>
+    <button class="tab active" data-tab="models">Models</button>
+    <button class="tab" data-tab="chat">Chat</button>
+    <button class="tab" data-tab="brain">Brain</button>
+    <button class="tab" data-tab="library">Library</button>
+    <button class="tab" data-tab="config">Config</button>
+    <button class="tab" data-tab="logs">Logs</button>
+  </nav>
+</header>
+
+<main>
+  <section id="tab-models" class="panel active">
+    <div id="model-cards" class="cards"></div>
+  </section>
+
+  <section id="tab-chat" class="panel">
+    <div class="chat-wrap">
+      <aside class="conv-list">
+        <button id="conv-new" class="btn" style="width:100%">New chat</button>
+        <div id="conv-items"></div>
+      </aside>
+      <div class="chat-main">
+        <div class="chat-toolbar">
+          <select id="chat-model" title="Model for this conversation"></select>
+          <input id="chat-system" type="text" placeholder="System prompt (optional)">
+          <details class="sampling">
+            <summary title="Sampling settings">⚙︎</summary>
+            <div class="sampling-pop">
+              <label>temperature <input id="s-temp" type="number" step="0.05" min="0" max="2" placeholder="model default"></label>
+              <label>top_p <input id="s-topp" type="number" step="0.05" min="0" max="1" placeholder="model default"></label>
+              <label>max tokens <input id="s-maxtok" type="number" step="256" min="1" value="4096"></label>
+            </div>
+          </details>
+          <span id="chat-stats" class="chat-stats"></span>
+        </div>
+        <div id="chat-log" class="chat-log">
+          <div class="empty">No messages yet. The first message loads the model into RAM automatically.</div>
+        </div>
+        <form id="chat-form" class="chat-form">
+          <textarea id="chat-input" rows="2" placeholder="Ask the model… (Enter to send, Shift+Enter for newline)"></textarea>
+          <button type="submit" class="btn btn-primary" id="chat-send">Send</button>
+          <button type="button" class="btn btn-danger" id="chat-stop" hidden>Stop</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-brain" class="panel">
+    <form id="brain-form" class="hf-form">
+      <input id="brain-q" type="text" placeholder="Search your second brain semantically… e.g. how did I split strings in zsh">
+      <button class="btn btn-primary" type="submit">Search</button>
+    </form>
+    <div class="brain-meta">
+      <span id="brain-status" class="hint"></span>
+      <button id="brain-reindex" class="btn btn-quiet">Reindex vault</button>
+    </div>
+    <div id="brain-results"></div>
+  </section>
+
+  <section id="tab-library" class="panel">
+    <div class="lib-grid">
+      <div class="lib-col">
+        <h2>On disk</h2>
+        <div id="file-list"></div>
+        <h2>Downloads</h2>
+        <div id="dl-list"><div class="empty">Nothing downloading.</div></div>
+      </div>
+      <div class="lib-col">
+        <h2>Find models on Hugging Face</h2>
+        <form id="hf-search-form" class="hf-form">
+          <input id="hf-query" type="text" placeholder="search, e.g. qwen coder gguf">
+          <button class="btn" type="submit">Search</button>
+        </form>
+        <div id="hf-results"></div>
+        <form id="hf-form" class="hf-form">
+          <input id="hf-repo" type="text" placeholder="or paste a repo id, e.g. unsloth/…-GGUF">
+          <button class="btn" type="submit">List files</button>
+        </form>
+        <div id="hf-files"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-config" class="panel">
+    <div class="config-toolbar">
+      <span class="hint">Edits llama-swap.yaml. A .bak backup is written on every save.</span>
+      <button id="cfg-save" class="btn">Save</button>
+      <button id="cfg-apply" class="btn btn-primary">Save &amp; restart llama-swap</button>
+      <span id="cfg-msg" class="cfg-msg"></span>
+    </div>
+    <textarea id="cfg-editor" spellcheck="false"></textarea>
+  </section>
+
+  <section id="tab-logs" class="panel">
+    <div class="logs-toolbar">
+      <span class="hint">Live stream from llama-swap and every model server it runs.</span>
+      <button id="logs-clear" class="btn btn-quiet">Clear view</button>
+    </div>
+    <pre id="log-view"></pre>
+  </section>
+</main>
+
+<script src="/static/vendor/marked.min.js"></script>
+<script src="/static/vendor/purify.min.js"></script>
+<script src="/static/vendor/highlight.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
