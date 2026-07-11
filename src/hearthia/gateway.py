@@ -1,5 +1,7 @@
 """llama-swap client. All HTTP to the gateway lives here — nowhere else."""
 
+from urllib.parse import quote
+
 import httpx
 
 
@@ -26,19 +28,23 @@ class Gateway:
             return []
         if r.status_code != 200:
             return []
-        return r.json().get("running", [])
+        try:
+            data = r.json().get("running") or []
+        except ValueError:
+            return []
+        return data if isinstance(data, list) else []
 
     async def warm(self, model_id: str, timeout: float = 300.0) -> bool:
         try:
             r = await self._client.get(
-                f"{self.base_url}/upstream/{model_id}/health", timeout=timeout
+                f"{self.base_url}/upstream/{quote(model_id, safe='')}/health", timeout=timeout
             )
             return r.status_code == 200
         except httpx.HTTPError:
             return False
 
     async def cool(self, model_id: str | None = None) -> bool:
-        path = "/api/models/unload" + (f"/{model_id}" if model_id else "")
+        path = "/api/models/unload" + (f"/{quote(model_id, safe='')}" if model_id else "")
         try:
             r = await self._client.post(f"{self.base_url}{path}")
             return r.status_code in (200, 204)

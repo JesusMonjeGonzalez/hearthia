@@ -50,3 +50,29 @@ def test_status_reports_gateway_down(tmp_path, config_path):
     result = runner.invoke(app, ["status"], env=_env(tmp_path, config_path))
     assert result.exit_code == 0
     assert "down" in result.output.lower()
+
+
+@respx.mock
+def test_models_missing_gateway_config_does_not_traceback(tmp_path):
+    respx.get(f"{GW}/running").respond(200, json={"running": []})
+    empty_dir = tmp_path / "empty-stack"
+    empty_dir.mkdir()
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(f'[paths]\nstack_dir = "{empty_dir}"\n')
+    result = runner.invoke(app, ["models"], env={"HEARTHIA_CONFIG": str(cfg)})
+    assert result.exit_code == 1
+    assert "no gateway config" in result.output
+
+
+@respx.mock
+def test_warm_failure_exits_1(tmp_path, config_path):
+    import httpx
+
+    respx.get(f"{GW}/upstream/big-coder/health").mock(side_effect=httpx.ConnectError("down"))
+    result = runner.invoke(app, ["warm", "big-coder"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 1
+
+
+def test_cool_without_model_or_all_exits_2(tmp_path, config_path):
+    result = runner.invoke(app, ["cool"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 2

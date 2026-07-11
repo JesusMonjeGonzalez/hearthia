@@ -31,11 +31,35 @@ async def test_running_returns_list_and_empty_on_error():
 
 
 @respx.mock
+async def test_running_returns_empty_on_non_json_body():
+    respx.get(f"{BASE}/running").respond(200, text="<html>oops</html>")
+    gw = Gateway(BASE)
+    assert await gw.running() == []
+    await gw.close()
+
+
+@respx.mock
+async def test_running_returns_empty_when_running_key_is_null():
+    respx.get(f"{BASE}/running").respond(200, json={"running": None})
+    gw = Gateway(BASE)
+    assert await gw.running() == []
+    await gw.close()
+
+
+@respx.mock
 async def test_warm_hits_upstream_health():
     route = respx.get(f"{BASE}/upstream/big-coder/health").respond(200)
     gw = Gateway(BASE)
     assert await gw.warm("big-coder") is True
     assert route.called
+    await gw.close()
+
+
+@respx.mock
+async def test_warm_url_encodes_model_id():
+    respx.get(f"{BASE}/upstream/a%2Fb/health").respond(200)
+    gw = Gateway(BASE)
+    assert await gw.warm("a/b") is True
     await gw.close()
 
 

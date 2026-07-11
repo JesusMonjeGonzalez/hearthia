@@ -47,7 +47,13 @@ def models() -> None:
             states = await _states(gw)
         finally:
             await gw.close()
-        for m in _registry(s).models():
+        try:
+            model_list = _registry(s).models()
+        except FileNotFoundError as e:
+            typer.echo(f"no gateway config at {s.paths.gateway_config}")
+            typer.echo("create it or point [paths].stack_dir at your stack")
+            raise typer.Exit(1) from e
+        for m in model_list:
             state = states.get(m.id, "cold")
             ttl = f"ttl {m.ttl}s" if m.ttl else "managed"
             roles = ",".join(m.roles) or "-"
@@ -77,7 +83,7 @@ def warm(model_id: str) -> None:
 
 @app.command()
 def cool(
-    model_id: str = typer.Argument(None),
+    model_id: str | None = typer.Argument(None),
     all_models: bool = typer.Option(False, "--all", help="Cool every model."),
 ) -> None:
     """Unload a model (or --all) from memory."""

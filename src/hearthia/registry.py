@@ -1,6 +1,7 @@
 """Model registry: read and edit llama-swap.yaml with comments preserved."""
 
 import io
+import os
 import re
 import shutil
 from dataclasses import dataclass
@@ -12,7 +13,7 @@ from ruamel.yaml import YAML
 
 _RE_FILE = re.compile(r"--model(?:\s+|=)(\S+\.gguf)")
 _RE_CTX = re.compile(r"--ctx-size(?:\s+|=)(\d+)")
-_RE_TEMP = re.compile(r"--temp(?:\s+|=)([\d.]+)")
+_RE_TEMP = re.compile(r"--temp(?:\s+|=)(\d+(?:\.\d+)?)")
 
 
 @dataclass(frozen=True)
@@ -109,7 +110,9 @@ class Registry:
         self._yaml.dump(doc, buf)
         text = buf.getvalue()
         YAML(typ="safe").load(text)  # refuse to write unparseable output
-        self.config_path.write_text(text)
+        tmp_path = self.config_path.with_suffix(self.config_path.suffix + ".tmp")
+        tmp_path.write_text(text)
+        os.replace(tmp_path, self.config_path)
 
     def _backup(self, keep: int = 10) -> None:
         self.backups_dir.mkdir(parents=True, exist_ok=True)

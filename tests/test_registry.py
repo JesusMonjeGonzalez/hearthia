@@ -64,3 +64,32 @@ models:
     assert m.file == Path("/tmp/models/eq.gguf")
     assert m.ctx == 4096
     assert m.temp == 0.5
+
+
+def test_malformed_temp_does_not_crash_models(tmp_path):
+    """A cmd with a malformed --temp value (e.g. from a typo) must not crash
+    models(); the regex should capture a sane numeric prefix and ignore any
+    trailing garbage rather than raising inside float()."""
+    yaml_with_bad_temp = """\
+models:
+  "bad-temp-model":
+    name: "Bad Temp Model"
+    description: "Model with a malformed --temp value."
+    cmd: |
+      /opt/homebrew/bin/llama-server
+      --model /tmp/models/bad.gguf
+      --temp 0.5.1
+    metadata:
+      roles: [chat]
+"""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml_with_bad_temp)
+    backups_dir = tmp_path / "backups"
+
+    reg = Registry(config_path, backups_dir)
+    models = reg.models()
+
+    assert len(models) == 1
+    # The tightened regex stops at the second dot, capturing "0.5" and
+    # ignoring the trailing ".1" rather than raising inside float().
+    assert models[0].temp == 0.5
