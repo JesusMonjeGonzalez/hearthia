@@ -74,3 +74,48 @@ models:
     m = reg.models()[0]
     assert m.ctx == 4096
     assert "--ctx-size=4096" in custom_path.read_text()
+
+
+def test_set_cmd_flag_with_backslash_value(config_path, backups_dir, tmp_path):
+    """Test that set_cmd_flag correctly handles values containing backslashes."""
+    # Create a config with --model and --temp flags
+    custom_yaml = """\
+models:
+  "test-model":
+    name: "Test Model"
+    description: "Test"
+    cmd: |
+      llama-server --model /tmp/x.gguf --temp 0.5
+    metadata:
+      roles: [chat]
+"""
+    custom_path = tmp_path / "custom.yaml"
+    custom_path.write_text(custom_yaml)
+    custom_backups = tmp_path / "backups"
+
+    reg = Registry(custom_path, custom_backups)
+    # Set flag with a backslash value that could be misinterpreted as a group reference
+    reg.set_cmd_flag("test-model", "--temp", r"a\1b")
+    text = custom_path.read_text()
+    # Assert the literal string is present (using raw string to check for actual backslash)
+    assert r"--temp a\1b" in text
+
+
+def test_set_cmd_flag_unknown_model_raises(config_path, backups_dir):
+    """Test that set_cmd_flag raises KeyError for unknown model."""
+    with pytest.raises(KeyError):
+        Registry(config_path, backups_dir).set_cmd_flag("nope", "--temp", "0.1")
+
+
+def test_rapid_saves_keep_distinct_backups(config_path, backups_dir):
+    """Test that two saves in quick succession create distinct backup files."""
+    reg = Registry(config_path, backups_dir)
+    # Perform two edits back-to-back
+    reg.set_ttl("big-coder", 700)
+    reg.set_ttl("big-coder", 800)
+
+    # Assert we have exactly 2 backup files with distinct names
+    backups = sorted(backups_dir.glob("llama-swap-*.yaml"))
+    assert len(backups) == 2
+    # Filenames should be different
+    assert backups[0].name != backups[1].name

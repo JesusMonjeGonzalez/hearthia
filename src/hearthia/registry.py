@@ -3,8 +3,8 @@
 import io
 import re
 import shutil
-import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -92,7 +92,12 @@ class Registry:
         doc = self.load()
         block = self._model_block(doc, model_id)
         cmd = str(block.get("cmd", ""))
-        new_cmd, n = re.subn(rf"({re.escape(flag)}(?:\s+|=))\S+", rf"\g<1>{value}", cmd)
+        new_cmd, n = re.subn(
+            rf"({re.escape(flag)}(?:\s+|=))\S+",
+            lambda m: m.group(1) + value,
+            cmd,
+            count=1,
+        )
         if n == 0:
             raise KeyError(f"flag '{flag}' not present in cmd of '{model_id}'")
         block["cmd"] = LiteralScalarString(new_cmd)
@@ -108,7 +113,7 @@ class Registry:
 
     def _backup(self, keep: int = 10) -> None:
         self.backups_dir.mkdir(parents=True, exist_ok=True)
-        stamp = time.strftime("%Y%m%d-%H%M%S")
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         shutil.copy2(self.config_path, self.backups_dir / f"llama-swap-{stamp}.yaml")
         for old in sorted(self.backups_dir.glob("llama-swap-*.yaml"))[:-keep]:
             old.unlink()
