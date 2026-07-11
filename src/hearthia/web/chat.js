@@ -62,7 +62,7 @@ function renderConv() {
   if (!c || !c.messages.length) {
     log.innerHTML = `<div class="empty">The hearth is quiet. Your first message warms the model into RAM.</div>`;
   } else {
-    for (const m of c.messages) addMsg(m.role, m.content, m.reasoning);
+    for (const m of c.messages) addMsg(m.role, m.content, m.reasoning, m.stats);
   }
   if (c) {
     $("#chat-system").value = c.system || "";
@@ -70,7 +70,12 @@ function renderConv() {
   }
 }
 
-function addMsg(role, content, reasoning) {
+function statsLine(t) {
+  if (!t?.predicted_per_second) return "";
+  return `⚡ ${t.predicted_per_second.toFixed(1)} tok/s · prefill ${Math.round(t.prompt_per_second)} t/s · ${t.predicted_n} tok`;
+}
+
+function addMsg(role, content, reasoning, stats) {
   const log = $("#chat-log");
   const d = document.createElement("div");
   d.className = "msg " + role;
@@ -81,6 +86,13 @@ function addMsg(role, content, reasoning) {
     }
     d.innerHTML = html + renderMD(content);
     highlightIn(d);
+    const sl = statsLine(stats);
+    if (sl) {
+      const sEl = document.createElement("div");
+      sEl.className = "msg-stats";
+      sEl.textContent = sl;
+      d.appendChild(sEl);
+    }
   } else {
     d.textContent = content;
   }
@@ -255,7 +267,8 @@ $("#chat-form").addEventListener("submit", async (e) => {
     reasoning = "",
     tokens = 0,
     tStart = performance.now(),
-    tFirst = null;
+    tFirst = null,
+    stats = null;
   const log = $("#chat-log");
 
   const redraw = () => {
@@ -292,6 +305,7 @@ $("#chat-form").addEventListener("submit", async (e) => {
         if (payload === "[DONE]") continue;
         try {
           const j = JSON.parse(payload);
+          if (j.timings?.predicted_per_second) stats = j.timings;
           if (j.error) {
             out += "\n`[error]` " + JSON.stringify(j.error);
             continue;
@@ -322,7 +336,14 @@ $("#chat-form").addEventListener("submit", async (e) => {
     el.classList.remove("thinking");
     if (out || reasoning) {
       redraw();
-      c.messages.push({ role: "assistant", content: out, reasoning });
+      const sl = statsLine(stats);
+      if (sl) {
+        const sEl = document.createElement("div");
+        sEl.className = "msg-stats";
+        sEl.textContent = sl;
+        el.appendChild(sEl);
+      }
+      c.messages.push({ role: "assistant", content: out, reasoning, stats });
     } else {
       el.innerHTML = `<span class="msg-error">no reply — stopped, or the model failed to load (see Logs)</span>`;
     }

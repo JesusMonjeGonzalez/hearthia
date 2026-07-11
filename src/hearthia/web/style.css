@@ -391,3 +391,10 @@ details.reasoning .rbody { color: var(--dim); font-size: 12.5px; white-space: pr
   .state.ember-kindling, .memseg.model.starting, body.hearth-warm .ember-mark { animation: none; }
   body::before { transition: none; }
 }
+
+.msg-stats {
+  font-size: 11px;
+  opacity: 0.55;
+  margin-top: 6px;
+  font-variant-numeric: tabular-nums;
+}
