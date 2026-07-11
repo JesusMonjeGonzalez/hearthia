@@ -122,3 +122,21 @@ def status() -> None:
     warm_ids = [mid for mid, st in states.items() if st in ("warm", "kindling")] or ["none"]
     typer.echo(f"warm      {', '.join(warm_ids)}")
     typer.echo(f"memory    {(vm.total - vm.available) / 2**30:.1f} / {vm.total / 2**30:.0f} GiB")
+
+
+@app.command()
+def daemon(
+    reload: bool = typer.Option(False, "--reload", help="Auto-restart on file changes."),
+) -> None:
+    """Run the Hearthia dashboard daemon."""
+    import uvicorn
+
+    s = Settings()
+    uvicorn.run(
+        "hearthia.daemon:create_app",
+        factory=True,
+        host=s.daemon.bind,
+        port=s.daemon.port,
+        reload=reload,
+        log_level="warning",
+    )

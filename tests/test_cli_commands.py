@@ -76,3 +76,9 @@ def test_warm_failure_exits_1(tmp_path, config_path):
 def test_cool_without_model_or_all_exits_2(tmp_path, config_path):
     result = runner.invoke(app, ["cool"], env=_env(tmp_path, config_path))
     assert result.exit_code == 2
+
+
+def test_daemon_command_exists():
+    result = runner.invoke(app, ["daemon", "--help"])
+    assert result.exit_code == 0
+    assert "daemon" in result.output.lower()
