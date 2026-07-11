@@ -410,13 +410,34 @@ def pull(
             models_dir.mkdir(parents=True, exist_ok=True)
             dest = models_dir / Path(target.path).name
             typer.echo(f"pulling {target.path} ({target.size / 2**30:.1f} GiB)…")
+
+            import sys
+            import time
+
+            start = time.monotonic()
+            last_draw = 0.0
+
+            def progress(done: int) -> None:
+                nonlocal last_draw
+                now = time.monotonic()
+                if now - last_draw < 0.25:
+                    return
+                last_draw = now
+                rate = done / max(now - start, 0.01) / 2**20
+                pct = f"{100 * done / target.size:5.1f}%" if target.size else "   ?  "
+                gib = f"{done / 2**30:6.2f} / {target.size / 2**30:.2f} GiB"
+                sys.stderr.write(f"\r  {gib}  {pct}  {rate:5.0f} MB/s ")
+                sys.stderr.flush()
+
             result = await download_file(
                 client,
                 repo,
                 target.path,
                 dest,
                 expected_sha256=target.sha256,
+                on_progress=progress,
             )
+            sys.stderr.write("\n")
             if not result["ok"]:
                 if not result.get("verified", True):
                     typer.echo(

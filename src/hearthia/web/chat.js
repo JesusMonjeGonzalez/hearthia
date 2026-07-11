@@ -153,7 +153,13 @@ $("#chat-form").addEventListener("submit", async (e) => {
   if (c.system) messages.push({ role: "system", content: c.system });
   for (const m of c.messages) messages.push({ role: m.role, content: m.content });
 
-  const body = { model: c.model, messages, stream: true };
+  // fall back to the first configured model if the select hadn't populated
+  // when this conversation was created — "" would 404 at the gateway
+  const body = {
+    model: c.model || $("#chat-model").options[0]?.value || "default",
+    messages,
+    stream: true,
+  };
   const t = parseFloat($("#s-temp").value);
   const p = parseFloat($("#s-topp").value);
   const mt = parseInt($("#s-maxtok").value, 10);

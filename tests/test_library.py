@@ -224,3 +224,17 @@ async def test_download_restarts_when_server_ignores_range(tmp_path):
         result = await download_file(client, "repo/x", "model.gguf", dest)
     assert result["ok"] is True
     assert dest.read_bytes() == b"fresh"
+
+
+@respx.mock
+async def test_download_reports_progress(tmp_path):
+    dest = tmp_path / "model.gguf"
+    respx.get(f"{HF_RESOLVE}/repo/x/resolve/main/model.gguf").respond(200, content=b"a" * 100)
+    seen = []
+    async with httpx.AsyncClient() as client:
+        result = await download_file(
+            client, "repo/x", "model.gguf", dest, chunk_size=40, on_progress=seen.append
+        )
+    assert result["ok"] is True
+    assert seen[-1] == 100
+    assert seen == sorted(seen)

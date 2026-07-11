@@ -1,6 +1,7 @@
 """Model library: HF search, verified downloads, fit check, add-to-config."""
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -70,6 +71,7 @@ async def download_file(
     dest: Path,
     expected_sha256: str | None = None,
     chunk_size: int = 1024 * 1024,
+    on_progress: Callable[[int], None] | None = None,
 ) -> dict:
     """Stream-download a file from HF with SHA-256 verification and atomic rename.
 
@@ -108,6 +110,8 @@ async def download_file(
                     f.write(chunk)
                     sha.update(chunk)
                     total += len(chunk)
+                    if on_progress:
+                        on_progress(total)
     except httpx.HTTPError:
         # keep the partial .tmp — the next attempt resumes from it
         return {"ok": False, "bytes": total, "sha256": "", "verified": False}
