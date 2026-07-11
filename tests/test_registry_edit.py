@@ -1,0 +1,76 @@
+import pytest
+
+from hearthia.registry import Registry
+
+
+def test_set_ttl_preserves_comments(config_path, backups_dir):
+    reg = Registry(config_path, backups_dir)
+    reg.set_ttl("big-coder", 900)
+    text = config_path.read_text()
+    assert "# gateway config — comments must survive edits" in text
+    assert "# the flagship" in text
+    assert reg.models()[0].ttl == 900
+
+
+def test_set_ttl_unknown_model_raises(config_path, backups_dir):
+    with pytest.raises(KeyError):
+        Registry(config_path, backups_dir).set_ttl("nope", 1)
+
+
+def test_set_ttl_model_without_ttl_raises(config_path, backups_dir):
+    with pytest.raises(KeyError):
+        Registry(config_path, backups_dir).set_ttl("tiny-embed", 1)
+
+
+def test_set_cmd_flag_edits_only_that_flag(config_path, backups_dir):
+    reg = Registry(config_path, backups_dir)
+    reg.set_cmd_flag("big-coder", "--ctx-size", "16384")
+    m = reg.models()[0]
+    assert m.ctx == 16384
+    assert m.temp == 0.7  # untouched
+    assert "--port ${PORT}" in config_path.read_text()  # macros untouched
+
+
+def test_set_cmd_flag_absent_flag_raises(config_path, backups_dir):
+    with pytest.raises(KeyError):
+        Registry(config_path, backups_dir).set_cmd_flag("tiny-embed", "--temp", "0.5")
+
+
+def test_backups_created_and_pruned_to_ten(config_path, backups_dir):
+    backups_dir.mkdir(parents=True)
+    for i in range(12):
+        (backups_dir / f"llama-swap-20260101-0000{i:02d}.yaml").write_text("old")
+    reg = Registry(config_path, backups_dir)
+    reg.set_ttl("big-coder", 700)
+    backups = sorted(backups_dir.glob("llama-swap-*.yaml"))
+    assert len(backups) == 10
+    # the newest backup is the pre-edit config, not "old"
+    assert "big-coder" in backups[-1].read_text()
+
+
+def test_set_cmd_flag_with_equals_separator(config_path, backups_dir, tmp_path):
+    """Test that set_cmd_flag works with --flag=value format."""
+    # Create a config with --ctx-size=8192 format
+    custom_yaml = """\
+# Test config
+models:
+  "test-model":
+    name: "Test Model"
+    description: "Test"
+    cmd: |
+      llama-server
+      --port 8000
+      --ctx-size=8192
+      --temp=0.5
+    metadata:
+      roles: [chat]
+"""
+    custom_path = tmp_path / "custom.yaml"
+    custom_path.write_text(custom_yaml)
+    custom_backups = tmp_path / "backups"
+
+    reg = Registry(custom_path, custom_backups)
+    reg.set_cmd_flag("test-model", "--ctx-size", "4096")
+    m = reg.models()[0]
+    assert m.ctx == 4096
+    assert "--ctx-size=4096" in custom_path.read_text()
