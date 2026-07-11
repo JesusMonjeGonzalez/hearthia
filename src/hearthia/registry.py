@@ -7,9 +7,9 @@ from typing import Any
 
 from ruamel.yaml import YAML
 
-_RE_FILE = re.compile(r"--model\s+(\S+\.gguf)")
-_RE_CTX = re.compile(r"--ctx-size\s+(\d+)")
-_RE_TEMP = re.compile(r"--temp\s+([\d.]+)")
+_RE_FILE = re.compile(r"--model(?:\s+|=)(\S+\.gguf)")
+_RE_CTX = re.compile(r"--ctx-size(?:\s+|=)(\d+)")
+_RE_TEMP = re.compile(r"--temp(?:\s+|=)([\d.]+)")
 
 
 @dataclass(frozen=True)
