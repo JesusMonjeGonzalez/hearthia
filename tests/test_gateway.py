@@ -48,3 +48,21 @@ async def test_cool_one_and_all():
     assert await gw.cool() is True
     assert one.called and every.called
     await gw.close()
+
+
+@respx.mock
+async def test_warm_returns_false_when_gateway_down():
+    respx.get(f"{BASE}/upstream/big-coder/health").mock(side_effect=httpx.ConnectError("down"))
+    gw = Gateway(BASE)
+    assert await gw.warm("big-coder") is False
+    await gw.close()
+
+
+@respx.mock
+async def test_cool_returns_false_when_gateway_down():
+    respx.post(f"{BASE}/api/models/unload/big-coder").mock(side_effect=httpx.ConnectError("down"))
+    respx.post(f"{BASE}/api/models/unload").mock(side_effect=httpx.ConnectError("down"))
+    gw = Gateway(BASE)
+    assert await gw.cool("big-coder") is False
+    assert await gw.cool() is False
+    await gw.close()
