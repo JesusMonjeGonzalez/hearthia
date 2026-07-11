@@ -22,6 +22,40 @@ _DEDUP_NOTE = (
     "(result already provided above — content unchanged; use the earlier copy "
     "instead of requesting it again)"
 )
+_CTX_BUDGET_CHARS = 60_000  # ~20K tokens; keeps 32K-ctx models clear of silent context-shift
+_TRIM_KEEP_ROUNDS = 2
+_TRIM_HEAD_CHARS = 400
+
+
+def _trim_history(messages: list[dict]) -> list[dict]:
+    """Shrink old tool results once the conversation outgrows the budget.
+
+    The newest _TRIM_KEEP_ROUNDS tool rounds are never touched.
+    """
+    total = sum(len(str(m.get("content") or "")) for m in messages)
+    if total <= _CTX_BUDGET_CHARS:
+        return messages
+    rounds = [
+        i
+        for i, m in enumerate(messages)
+        if m.get("role") == "assistant" and m.get("tool_calls")
+    ]
+    protected_from = (
+        rounds[-_TRIM_KEEP_ROUNDS]
+        if len(rounds) >= _TRIM_KEEP_ROUNDS
+        else 0
+    )
+    out = [dict(m) for m in messages]
+    for i, m in enumerate(out):
+        if total <= _CTX_BUDGET_CHARS or i >= protected_from:
+            break
+        content = str(m.get("content") or "")
+        if m.get("role") != "tool" or len(content) <= _TRIM_HEAD_CHARS:
+            continue
+        trimmed = content[:_TRIM_HEAD_CHARS]
+        m["content"] = trimmed + "\n… [older tool result trimmed to fit context]"
+        total -= len(content) - len(m["content"])
+    return out
 
 
 def _body(model, messages, stream, **kw):
@@ -160,6 +194,7 @@ async def chat(request: Request):
             yield _reasoning_event(f"🗺️ project map injected: {root}")
 
         for round_no in range(_MAX_TOOL_ROUNDS + 1):
+            messages = _trim_history(messages)
             final_round = round_no == _MAX_TOOL_ROUNDS
             req_body = _body(
                 model,

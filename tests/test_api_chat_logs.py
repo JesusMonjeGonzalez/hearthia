@@ -253,3 +253,43 @@ async def test_metrics_gateway_down(config_path, backups_dir):
     assert r.status_code == 200
     assert r.json()["raw"] == ""
     await app.state.gateway.close()
+
+
+def _tool_round(i: int, content: str) -> list[dict]:
+    return [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": f"c{i}",
+                    "type": "function",
+                    "function": {"name": "read_files", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": f"c{i}", "content": content},
+    ]
+
+
+def test_trim_history_shrinks_oldest_tool_results_only():
+    from hearthia.api.chat import _CTX_BUDGET_CHARS, _trim_history
+
+    big = "x" * 20_000
+    msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}]
+    for i in range(4):
+        msgs += _tool_round(i, big)
+    out = _trim_history(msgs)
+    total = sum(len(str(m.get("content") or "")) for m in out)
+    assert total <= _CTX_BUDGET_CHARS
+    assert out[-1]["content"] == big  # newest round intact
+    assert out[-3]["content"] == big  # second-newest intact
+    assert "trimmed" in out[3]["content"]  # oldest tool result trimmed
+    assert msgs[3]["content"] == big  # input not mutated
+
+
+def test_trim_history_noop_under_budget():
+    from hearthia.api.chat import _trim_history
+
+    msgs = [{"role": "user", "content": "hola"}, *_tool_round(0, "small")]
+    assert _trim_history(msgs) == msgs
