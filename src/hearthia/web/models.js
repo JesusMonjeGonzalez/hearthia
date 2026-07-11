@@ -18,6 +18,15 @@ export async function refreshStatus() {
       "hearth-warm",
       s.running.some((m) => m.state === "ready"),
     );
+    setBanner(
+      !s.swap_up
+        ? "Gateway is down — start it with `hearth up gateway`, then check the Logs tab."
+        : s.health && !s.health.events_connected
+          ? "Gateway event stream disconnected — reconnecting. Activity tracking is paused."
+          : s.health && s.health.crash_loop
+            ? "A model server is crash-looping (3+ exits in 5 min) — check the Logs tab."
+            : "",
+    );
     const sys = s.system;
     const models = s.running.filter((m) => m.rss);
     const modelBytes = models.reduce((a, m) => a + m.rss, 0);
@@ -71,7 +80,14 @@ export async function refreshStatus() {
     );
   } catch {
     $("#swap-dot").classList.remove("up");
+    setBanner("Hearthia daemon unreachable — is hearthd running? (`hearth up daemon`)");
   }
+}
+
+function setBanner(text) {
+  const b = $("#banner");
+  b.textContent = text;
+  b.hidden = !text;
 }
 
 function ttlRingSVG(left, total) {

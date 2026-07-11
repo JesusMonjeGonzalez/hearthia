@@ -217,3 +217,16 @@ async def test_run_event_watcher_reconnects_after_stream_drop(monkeypatch):
     task.cancel()
     assert attempts >= 3
     await gw.close()
+
+
+def test_crash_looping_flag():
+    import time as _t
+
+    gw = Gateway("http://127.0.0.1:9292")
+    tel = Telemetry(gw)
+    assert tel.crash_looping() is False
+    now = _t.time()
+    tel._crashes = [now - 10, now - 5, now - 1]
+    assert tel.crash_looping() is True
+    tel._crashes = [now - 400, now - 350, now - 320]
+    assert tel.crash_looping() is False

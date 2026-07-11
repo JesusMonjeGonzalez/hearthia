@@ -1,6 +1,7 @@
 """Lifecycle engine: config-driven follow rules, crash-loop detection."""
 
 import asyncio
+import logging
 import subprocess
 import time
 
@@ -11,6 +12,8 @@ from hearthia.registry import Registry
 from hearthia.telemetry import Telemetry
 
 _ROLE_GRACE_SECONDS = 300
+
+log = logging.getLogger("hearthia.lifecycle")
 
 
 def app_alive(app_name: str) -> bool:
@@ -81,7 +84,8 @@ class LifecycleEngine:
         """One iteration of the follow-rules loop."""
         try:
             running = await self._is_running()
-        except Exception:
+        except Exception as e:
+            log.warning("tick skipped — gateway unreachable (%s)", e)
             return
 
         warm_tasks: list[asyncio.Task[None]] = []

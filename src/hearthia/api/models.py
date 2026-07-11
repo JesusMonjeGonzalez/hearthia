@@ -43,6 +43,10 @@ async def status(request: Request):
 
     return {
         "swap_up": swap_up,
+        "health": {
+            "events_connected": tel.events_connected,
+            "crash_loop": tel.crash_looping(),
+        },
         "running": running,
         "system": {
             "ram_total": vm.total,

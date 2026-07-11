@@ -238,3 +238,15 @@ async def test_add_model_endpoint_missing_file_404(config_path, backups_dir):
         )
     assert r.status_code == 404
     await app.state.gateway.close()
+
+
+@respx.mock
+async def test_status_exposes_health(config_path, backups_dir):
+    respx.get(f"{BASE}/health").respond(200)
+    respx.get(f"{BASE}/running").respond(200, json={"running": []})
+    app = _app(config_path, backups_dir)
+    async with await _client(app) as client:
+        r = await client.get("/api/status")
+    h = r.json()["health"]
+    assert h == {"events_connected": False, "crash_loop": False}
+    await app.state.gateway.close()

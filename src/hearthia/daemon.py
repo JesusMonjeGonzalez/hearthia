@@ -1,6 +1,7 @@
 """Hearthia daemon — FastAPI app assembly only (no logic here)."""
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -24,6 +25,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     """
     if settings is None:
         settings = Settings()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 
     gw = Gateway(settings.gateway.url)
     reg = Registry(settings.paths.gateway_config, settings.paths.backups_dir)

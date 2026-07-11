@@ -1,5 +1,6 @@
 """Telemetry: activity tracking, SSE event watcher, upstream metrics poller, psutil stats."""
 
+import logging
 import re
 import subprocess
 import time
@@ -8,6 +9,8 @@ from collections.abc import AsyncIterator
 import psutil
 
 from hearthia.gateway import Gateway
+
+log = logging.getLogger("hearthia.telemetry")
 
 _RE_REQ = re.compile(r'"POST /(?:v1/(?:chat/completions|completions|embeddings)|upstream)')
 _RE_EVAL = re.compile(r"<([^>]+)>.*?\beval time\s*=.*?([\d.]+) tokens per second")
@@ -54,9 +57,15 @@ class Telemetry:
         self._gw = gw
         self.activity: dict[str, dict] = {}
         self.running_now: set[str] = set()
+        self.events_connected = False
         self._crashes: list[float] = []
         self._last_crash_notify = 0.0
         self._no_metrics: set[str] = set()
+
+    def crash_looping(self) -> bool:
+        """True while 3+ model server crashes landed in the last 5 minutes."""
+        now = time.time()
+        return len([t for t in self._crashes if now - t < 300]) >= 3
 
     def _note_activity(self, models: set[str]) -> None:
         now = time.time()
@@ -85,6 +94,9 @@ class Telemetry:
         Processes logData and modelStatus events to update activity/running state.
         """
         async for evt in self._gw.events():
+            if not self.events_connected:
+                self.events_connected = True
+                log.info("gateway event stream connected")
             etype, data = evt.get("type"), evt.get("data")
             if etype == "logData":
                 text = data.get("data", "") if isinstance(data, dict) else str(data)
@@ -153,8 +165,10 @@ class Telemetry:
             try:
                 async for _ in self.watch_events():
                     pass
-            except Exception:  # noqa: BLE001 — any stream error means reconnect
-                pass
+            except Exception as e:  # noqa: BLE001 — any stream error means reconnect
+                if self.events_connected:
+                    log.warning("gateway event stream dropped (%s) — reconnecting", e)
+            self.events_connected = False
             await asyncio.sleep(retry_delay)
 
     async def run_metrics_poller(self, interval: float = 5.0) -> None:

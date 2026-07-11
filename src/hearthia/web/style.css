@@ -133,6 +133,14 @@ body.hearth-warm .ember-mark { color: var(--amber); animation: breathe 3.2s ease
 .vital label { display: block; font: 10px var(--mono); color: var(--dim); text-transform: uppercase; letter-spacing: 0.12em; }
 .vital b { font: 600 14px var(--mono); }
 
+/* ── failure banner ── */
+.banner {
+  margin: 2px 0 6px; padding: 8px 12px; border-radius: 8px;
+  background: #2a1210; border: 1px solid rgba(229, 83, 75, 0.45);
+  color: #f0a09a; font: 12.5px var(--mono);
+}
+.banner[hidden] { display: none; }
+
 /* ── tabs ── */
 nav { display: flex; gap: 2px; }
 .tab {
