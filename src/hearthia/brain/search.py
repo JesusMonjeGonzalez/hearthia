@@ -2,7 +2,7 @@
 
 import httpx
 
-from hearthia.brain.indexer import BrainIndex, chunk_markdown, vault_files
+from hearthia.brain.indexer import BrainIndex, chunk_markdown, strip_frontmatter, vault_files
 
 
 async def embed_texts(
@@ -43,7 +43,7 @@ async def reindex(
         mtime = f.stat().st_mtime
         if known.get(rel) == mtime:
             continue
-        text = f.read_text(errors="ignore")
+        text = strip_frontmatter(f.read_text(errors="ignore"))
         chunks = chunk_markdown(f"# {f.stem}\n{text}")
         if not chunks:
             continue

@@ -3,6 +3,7 @@ from hearthia.brain.indexer import (
     chunk_markdown,
     cosine_similarity,
     init_db,
+    strip_frontmatter,
     vault_files,
 )
 
@@ -133,3 +134,54 @@ def test_brain_search_returns_results(tmp_path):
     assert results[0]["path"] == "note.md"
     assert "hello world" in results[0]["text"]
     index.close()
+
+
+def test_insert_chunks_replaces_vec_rows(tmp_path):
+    """Re-indexing a changed file must not leave stale embeddings behind.
+
+    Stale vec_chunks rows join against the new text with old vectors, producing
+    wrong scores and duplicate results.
+    """
+    index = BrainIndex(tmp_path / "b.db", tmp_path, embedding_dim=3)
+    index.insert_chunks("note.md", 1.0, ["v1"], [[1.0, 0.0, 0.0]])
+    index.insert_chunks("note.md", 2.0, ["v2"], [[0.0, 1.0, 0.0]])
+    index.commit()
+    n_vec = index.db.execute("SELECT COUNT(*) FROM vec_chunks WHERE path='note.md'").fetchone()[0]
+    assert n_vec == 1
+    results = index.search([0.0, 1.0, 0.0], k=5)
+    assert len(results) == 1
+    assert results[0]["text"] == "v2"
+    index.close()
+
+
+def test_remove_file_cleans_vec_rows(tmp_path):
+    """Orphaned vec rows waste KNN slots — LIMIT k returns fewer visible hits."""
+    index = BrainIndex(tmp_path / "b.db", tmp_path, embedding_dim=3)
+    index.insert_chunks("note.md", 1.0, ["chunk"], [[1.0, 0.0, 0.0]])
+    index.remove_file("note.md")
+    index.commit()
+    n_vec = index.db.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0]
+    assert n_vec == 0
+    index.close()
+
+
+def test_search_score_is_cosine_similarity(tmp_path):
+    """sqlite-vec KNN distance is L2; with normalized vectors cos = 1 - d²/2."""
+    index = BrainIndex(tmp_path / "b.db", tmp_path, embedding_dim=3)
+    index.insert_chunks("a.md", 1.0, ["same"], [[1.0, 0.0, 0.0]])
+    index.insert_chunks("b.md", 1.0, ["orthogonal"], [[0.0, 1.0, 0.0]])
+    index.commit()
+    results = {r["text"]: r["score"] for r in index.search([1.0, 0.0, 0.0], k=5)}
+    assert abs(results["same"] - 1.0) < 0.01
+    assert abs(results["orthogonal"] - 0.0) < 0.01
+    index.close()
+
+
+def test_strip_frontmatter():
+    text = "---\ntags: [a, b]\ncreated: 123\n---\n# Title\nBody text."
+    assert strip_frontmatter(text) == "# Title\nBody text."
+
+
+def test_strip_frontmatter_no_frontmatter():
+    text = "# Title\nBody text."
+    assert strip_frontmatter(text) == text

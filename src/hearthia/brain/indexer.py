@@ -59,6 +59,12 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / (na * nb) if na and nb else 0.0
 
 
+def strip_frontmatter(text: str) -> str:
+    """Drop a leading YAML frontmatter block — metadata pollutes embeddings and snippets."""
+    m = re.match(r"\A---\n.*?\n---\n", text, re.DOTALL)
+    return text[m.end() :] if m else text
+
+
 def chunk_markdown(text: str, target: int = 1200) -> list[str]:
     """Split on top-level headings, then hard-wrap oversized pieces."""
     parts = re.split(r"(?m)^(?=#{1,3} )", text)
@@ -112,6 +118,8 @@ class BrainIndex:
 
     def remove_file(self, rel_path: str) -> None:
         self.db.execute("DELETE FROM chunks WHERE path=?", (rel_path,))
+        if _HAS_VEC:
+            self.db.execute("DELETE FROM vec_chunks WHERE path=?", (rel_path,))
 
     def insert_chunks(
         self,
@@ -120,8 +128,10 @@ class BrainIndex:
         chunks: list[str],
         embeddings: list[list[float]],
     ) -> None:
-        """Insert chunks with their embeddings."""
+        """Insert chunks with their embeddings, replacing any previous rows for the file."""
         self.db.execute("DELETE FROM chunks WHERE path=?", (rel_path,))
+        if _HAS_VEC:
+            self.db.execute("DELETE FROM vec_chunks WHERE path=?", (rel_path,))
         rows = [
             (rel_path, mtime, i, text)
             for i, (text, _) in enumerate(zip(chunks, embeddings, strict=False))
@@ -164,7 +174,9 @@ class BrainIndex:
                 ).fetchall()
                 return [
                     {
-                        "score": round(1 - r[3], 3),
+                        # KNN distance is L2; embeddings are L2-normalized, so
+                        # cosine similarity = 1 - d²/2
+                        "score": round(1 - (r[3] ** 2) / 2, 3),
                         "path": r[0],
                         "idx": r[1],
                         "text": r[2],
