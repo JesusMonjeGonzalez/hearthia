@@ -16,15 +16,6 @@ from hearthia.settings import Settings
 from hearthia.telemetry import Telemetry
 
 
-async def _safe_consume(agen) -> None:
-    """Consume an async generator indefinitely, swallowing errors."""
-    try:
-        async for _ in agen:
-            pass
-    except Exception:
-        pass
-
-
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Assemble the Hearthia daemon FastAPI app.
 
@@ -42,7 +33,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         tasks = [
-            asyncio.create_task(_safe_consume(tel.watch_events())),
+            asyncio.create_task(tel.run_event_watcher()),
             asyncio.create_task(tel.run_metrics_poller()),
             asyncio.create_task(engine.run()),
         ]

@@ -54,13 +54,19 @@ class LifecycleEngine:
         self._rules = rules
         self._loading: set[str] = set()
         self._prev_role_alive: dict[str, bool] = {}
-        self._role_died_at: float = 0.0
+        self._role_died_at: dict[str, float] = {}
 
     async def _is_running(self) -> set[str]:
         return {m.get("model", "") for m in await self._gw.running()}
 
     def _models_with_role(self, role: str) -> set[str]:
-        return {m.id for m in self._reg.models() if role in m.roles}
+        models = self._reg.models()
+        declared = {m.id for m in models if role in m.roles}
+        if declared or role != "chat":
+            return declared
+        # adopted configs rarely declare metadata.roles — treat every
+        # non-embedding model that isn't itself lifecycle-managed as chat
+        return {m.id for m in models if not m.embedding and m.id not in self._rules}
 
     async def _spawn(self, mid: str) -> None:
         if mid in self._loading:
@@ -101,14 +107,13 @@ class LifecycleEngine:
                 if role_alive and mid not in running:
                     warm_tasks.append(asyncio.create_task(self._spawn(mid)))
                 elif prev and not role_alive and mid in running:
-                    if self._role_died_at == 0.0:
-                        self._role_died_at = time.time()
-                    if time.time() - self._role_died_at > _ROLE_GRACE_SECONDS:
+                    died_at = self._role_died_at.setdefault(mid, time.time())
+                    if time.time() - died_at > _ROLE_GRACE_SECONDS:
                         await self._gw.cool(mid)
-                        self._role_died_at = 0.0
+                        self._role_died_at.pop(mid, None)
 
                 if role_alive:
-                    self._role_died_at = 0.0
+                    self._role_died_at.pop(mid, None)
                 self._prev_role_alive[target] = role_alive
 
         if warm_tasks:

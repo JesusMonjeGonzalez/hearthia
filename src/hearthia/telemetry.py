@@ -141,6 +141,22 @@ class Telemetry:
             except httpx.HTTPError:
                 continue
 
+    async def run_event_watcher(self, retry_delay: float = 3.0) -> None:
+        """Long-lived wrapper around watch_events: reconnects when the SSE stream drops.
+
+        llama-swap restarts (config apply, weekly brew upgrade) kill the stream;
+        without this loop, activity tracking would silently die with it.
+        """
+        import asyncio
+
+        while True:
+            try:
+                async for _ in self.watch_events():
+                    pass
+            except Exception:  # noqa: BLE001 — any stream error means reconnect
+                pass
+            await asyncio.sleep(retry_delay)
+
     async def run_metrics_poller(self, interval: float = 5.0) -> None:
         """Long-lived loop around poll_upstream_metrics for the daemon's lifespan."""
         import asyncio

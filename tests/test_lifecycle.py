@@ -110,7 +110,7 @@ async def test_tick_cools_embed_when_last_chat_unloaded(config_path, backups_dir
     engine = LifecycleEngine(gw, reg, tel, rules)
 
     engine._prev_role_alive = {"chat": True}
-    engine._role_died_at = time.time() - 400  # beyond 300s grace
+    engine._role_died_at = {"tiny-embed": time.time() - 400}  # beyond 300s grace
     await engine.tick()
 
     assert cool_route.called
@@ -134,7 +134,7 @@ async def test_tick_does_not_cool_embed_if_direct_user_grace(config_path, backup
     engine = LifecycleEngine(gw, reg, tel, rules)
 
     engine._prev_role_alive = {"chat": True}
-    engine._role_died_at = time.time()  # just died, within grace period
+    engine._role_died_at = {"tiny-embed": time.time()}  # just died, within grace period
     await engine.tick()
 
     assert not cool_route.called
@@ -220,3 +220,70 @@ def test_notify_crash_loop_does_not_notify_below_threshold():
         engine.notify_crash_loop()
 
     assert not mock_popen.called
+
+
+NO_ROLES_YAML = """\
+models:
+  "chatty":
+    name: "Chatty"
+    cmd: |
+      llama-server --port ${PORT} --model /tmp/chatty.gguf
+    ttl: 600
+  "embed":
+    name: "Embed"
+    cmd: |
+      llama-server --port ${PORT} --model /tmp/embed.gguf --embeddings
+  "fim":
+    name: "FIM"
+    cmd: |
+      llama-server --port ${PORT} --model /tmp/fim.gguf
+"""
+
+
+@respx.mock
+async def test_role_chat_falls_back_when_no_roles_declared(tmp_path, backups_dir):
+    """Adopted configs rarely declare metadata.roles; role:chat must still work.
+
+    Fallback: chat = every non-embedding model that isn't itself lifecycle-managed.
+    """
+    cfg = tmp_path / "llama-swap.yaml"
+    cfg.write_text(NO_ROLES_YAML)
+    respx.get(f"{BASE}/running").respond(
+        200, json={"running": [{"model": "chatty", "state": "ready"}]}
+    )
+    warm_route = respx.get(f"{BASE}/upstream/embed/health").respond(200)
+
+    gw = Gateway(BASE)
+    reg = Registry(cfg, backups_dir)
+    tel = Telemetry(gw)
+    engine = LifecycleEngine(gw, reg, tel, {"embed": "role:chat", "fim": "app:TestApp"})
+
+    with patch("hearthia.lifecycle.app_alive", return_value=False):
+        await engine.tick()
+
+    assert warm_route.called
+    await gw.close()
+
+
+@respx.mock
+async def test_role_grace_timers_are_independent_per_follower(config_path, backups_dir):
+    """Two role followers must not share one grace timer."""
+    import time
+
+    respx.get(f"{BASE}/running").respond(
+        200, json={"running": [{"model": "tiny-embed", "state": "ready"}]}
+    )
+    cool_route = respx.post(f"{BASE}/api/models/unload/tiny-embed").respond(200)
+
+    gw = Gateway(BASE)
+    reg = Registry(config_path, backups_dir)
+    tel = Telemetry(gw)
+    engine = LifecycleEngine(gw, reg, tel, {"tiny-embed": "role:chat"})
+
+    engine._prev_role_alive = {"chat": True}
+    engine._role_died_at["tiny-embed"] = time.time() - 400
+    await engine.tick()
+
+    assert cool_route.called
+    assert isinstance(engine._role_died_at, dict)
+    await gw.close()

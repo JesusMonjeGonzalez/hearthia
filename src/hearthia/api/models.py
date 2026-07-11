@@ -35,9 +35,7 @@ async def status(request: Request):
             by_file[m.file.name] = m.id
     for m in running:
         # llama_server_procs reports the gguf as the full --model path; key by basename
-        proc = next(
-            (p for p in procs if by_file.get(Path(p["gguf"]).name) == m.get("model")), None
-        )
+        proc = next((p for p in procs if by_file.get(Path(p["gguf"]).name) == m.get("model")), None)
         m["rss"] = proc["rss"] if proc else None
         act = tel.snapshot().get(m.get("model", ""), {})
         m["last_activity"] = act.get("last_activity")

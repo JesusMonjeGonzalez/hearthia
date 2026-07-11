@@ -1,3 +1,4 @@
+import httpx
 import respx
 
 from hearthia.gateway import Gateway
@@ -193,4 +194,26 @@ async def test_run_metrics_poller_polls_repeatedly(monkeypatch):
     await asyncio.sleep(0.08)
     task.cancel()
     assert calls >= 3
+    await gw.close()
+
+
+async def test_run_event_watcher_reconnects_after_stream_drop(monkeypatch):
+    """A llama-swap restart kills the SSE stream; the watcher must reconnect."""
+    import asyncio
+
+    gw = Gateway("http://127.0.0.1:9292")
+    tel = Telemetry(gw)
+    attempts = 0
+
+    async def flaky_events():
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ConnectError("stream dropped")
+        yield  # pragma: no cover — makes this an async generator
+
+    monkeypatch.setattr(tel, "watch_events", flaky_events)
+    task = asyncio.create_task(tel.run_event_watcher(retry_delay=0.01))
+    await asyncio.sleep(0.08)
+    task.cancel()
+    assert attempts >= 3
     await gw.close()
