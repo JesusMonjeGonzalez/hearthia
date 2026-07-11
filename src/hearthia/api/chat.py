@@ -30,31 +30,30 @@ _TRIM_HEAD_CHARS = 400
 def _trim_history(messages: list[dict]) -> list[dict]:
     """Shrink old tool results once the conversation outgrows the budget.
 
-    The newest _TRIM_KEEP_ROUNDS tool rounds are never touched.
+    Protects the newest _TRIM_KEEP_ROUNDS tool rounds; if that is not
+    enough, falls back to protecting only the newest round. The newest
+    round is never trimmed.
     """
     total = sum(len(str(m.get("content") or "")) for m in messages)
     if total <= _CTX_BUDGET_CHARS:
         return messages
-    rounds = [
-        i
-        for i, m in enumerate(messages)
-        if m.get("role") == "assistant" and m.get("tool_calls")
-    ]
-    protected_from = (
-        rounds[-_TRIM_KEEP_ROUNDS]
-        if len(rounds) >= _TRIM_KEEP_ROUNDS
-        else 0
-    )
     out = [dict(m) for m in messages]
-    for i, m in enumerate(out):
-        if total <= _CTX_BUDGET_CHARS or i >= protected_from:
+    rounds = [i for i, m in enumerate(out) if m.get("role") == "assistant" and m.get("tool_calls")]
+    for keep in range(_TRIM_KEEP_ROUNDS, 0, -1):
+        if not rounds:
             break
-        content = str(m.get("content") or "")
-        if m.get("role") != "tool" or len(content) <= _TRIM_HEAD_CHARS:
-            continue
-        trimmed = content[:_TRIM_HEAD_CHARS]
-        m["content"] = trimmed + "\n… [older tool result trimmed to fit context]"
-        total -= len(content) - len(m["content"])
+        protected_from = rounds[-keep] if len(rounds) >= keep else rounds[-1]
+        for i, m in enumerate(out):
+            if total <= _CTX_BUDGET_CHARS or i >= protected_from:
+                break
+            content = str(m.get("content") or "")
+            if m.get("role") != "tool" or len(content) <= _TRIM_HEAD_CHARS:
+                continue
+            trimmed = content[:_TRIM_HEAD_CHARS]
+            m["content"] = trimmed + "\n… [older tool result trimmed to fit context]"
+            total -= len(content) - len(m["content"])
+        if total <= _CTX_BUDGET_CHARS:
+            break
     return out
 
 

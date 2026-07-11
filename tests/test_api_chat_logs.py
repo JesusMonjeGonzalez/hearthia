@@ -293,3 +293,15 @@ def test_trim_history_noop_under_budget():
 
     msgs = [{"role": "user", "content": "hola"}, *_tool_round(0, "small")]
     assert _trim_history(msgs) == msgs
+
+
+def test_trim_history_falls_back_to_protecting_only_newest_round():
+    from hearthia.api.chat import _CTX_BUDGET_CHARS, _trim_history
+
+    big = "x" * 35_000
+    msgs = [{"role": "user", "content": "u"}, *_tool_round(0, big), *_tool_round(1, big)]
+    out = _trim_history(msgs)
+    total = sum(len(str(m.get("content") or "")) for m in out)
+    assert total <= _CTX_BUDGET_CHARS
+    assert out[-1]["content"] == big  # newest round never trimmed
+    assert "trimmed" in out[2]["content"]  # older round sacrificed
