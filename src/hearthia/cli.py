@@ -169,14 +169,15 @@ def uninstall() -> None:
 @app.command()
 def up(service: str = typer.Argument("all", help="gateway | daemon | update | all")) -> None:
     """Start a service (or all)."""
+    import os
+    import subprocess
+
     from hearthia.service import DAEMON_LABEL, GATEWAY_LABEL, UPDATE_LABEL
 
     label_map = {"gateway": GATEWAY_LABEL, "daemon": DAEMON_LABEL, "update": UPDATE_LABEL}
     targets = list(label_map.values()) if service == "all" else [label_map[service]]
-    uid = __import__("os").getuid()
-    import subprocess
-
-    launch_agents = __import__("pathlib").Path.home() / "Library" / "LaunchAgents"
+    uid = os.getuid()
+    launch_agents = Path.home() / "Library" / "LaunchAgents"
     for label in targets:
         plist = launch_agents / f"{label}.plist"
         if not plist.exists():
@@ -193,13 +194,14 @@ def up(service: str = typer.Argument("all", help="gateway | daemon | update | al
 @app.command()
 def down(service: str = typer.Argument("all", help="gateway | daemon | update | all")) -> None:
     """Stop a service (or all)."""
+    import os
+    import subprocess
+
     from hearthia.service import DAEMON_LABEL, GATEWAY_LABEL, UPDATE_LABEL
 
     label_map = {"gateway": GATEWAY_LABEL, "daemon": DAEMON_LABEL, "update": UPDATE_LABEL}
     targets = list(label_map.values()) if service == "all" else [label_map[service]]
-    uid = __import__("os").getuid()
-    import subprocess
-
+    uid = os.getuid()
     for label in targets:
         subprocess.run(
             ["launchctl", "bootout", f"gui/{uid}/{label}"],
