@@ -90,3 +90,93 @@ async def test_cool_returns_false_when_gateway_down():
     assert await gw.cool("big-coder") is False
     assert await gw.cool() is False
     await gw.close()
+
+
+@respx.mock
+async def test_metrics_returns_text():
+    respx.get(f"{BASE}/metrics").respond(200, text="llamacpp:predicted_tokens_seconds 42.0\n")
+    gw = Gateway(BASE)
+    assert await gw.metrics() == "llamacpp:predicted_tokens_seconds 42.0\n"
+    await gw.close()
+
+
+@respx.mock
+async def test_metrics_returns_empty_when_down():
+    respx.get(f"{BASE}/metrics").mock(side_effect=httpx.ConnectError("down"))
+    gw = Gateway(BASE)
+    assert await gw.metrics() == ""
+    await gw.close()
+
+
+@respx.mock
+async def test_metrics_returns_empty_on_non_200():
+    respx.get(f"{BASE}/metrics").respond(500)
+    gw = Gateway(BASE)
+    assert await gw.metrics() == ""
+    await gw.close()
+
+
+@respx.mock
+async def test_events_yields_parsed_json():
+    sse = 'data: {"type":"modelStatus","data":[{"model":"big-coder","state":"ready"}]}\n\n'
+    route = respx.get(f"{BASE}/api/events").respond(200, text=sse)
+    gw = Gateway(BASE)
+    events = []
+    async for evt in gw.events():
+        events.append(evt)
+        break
+    assert route.called
+    assert events[0]["type"] == "modelStatus"
+    assert events[0]["data"][0]["model"] == "big-coder"
+    await gw.close()
+
+
+@respx.mock
+async def test_events_skips_non_data_lines():
+    sse = ': comment\nevent: ping\ndata: {"type":"logData","data":{"data":"hi"}}\n\n'
+    respx.get(f"{BASE}/api/events").respond(200, text=sse)
+    gw = Gateway(BASE)
+    events = []
+    async for evt in gw.events():
+        events.append(evt)
+        break
+    assert events[0]["type"] == "logData"
+    await gw.close()
+
+
+@respx.mock
+async def test_events_skips_unparseable_json():
+    sse = 'data: {bad json}\ndata: {"type":"logData","data":{}}\n\n'
+    respx.get(f"{BASE}/api/events").respond(200, text=sse)
+    gw = Gateway(BASE)
+    events = []
+    async for evt in gw.events():
+        events.append(evt)
+        break
+    assert events[0]["type"] == "logData"
+    await gw.close()
+
+
+@respx.mock
+async def test_logs_stream_yields_bytes():
+    respx.get(f"{BASE}/logs/stream").respond(200, text="line1\nline2\n")
+    gw = Gateway(BASE)
+    chunks = []
+    async for chunk in gw.logs_stream():
+        chunks.append(chunk)
+    assert b"".join(chunks) == b"line1\nline2\n"
+    await gw.close()
+
+
+@respx.mock
+async def test_chat_stream_yields_bytes():
+    route = respx.post(f"{BASE}/v1/chat/completions").respond(
+        200, text="data: chunk1\n\ndata: chunk2\n\n"
+    )
+    gw = Gateway(BASE)
+    chunks = []
+    async for chunk in gw.chat_stream(b'{"model":"big-coder"}'):
+        chunks.append(chunk)
+    assert route.called
+    assert b"".join(chunks) == b"data: chunk1\n\ndata: chunk2\n\n"
+    await gw.close()

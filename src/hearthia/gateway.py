@@ -1,5 +1,7 @@
 """llama-swap client. All HTTP to the gateway lives here — nowhere else."""
 
+import json
+from collections.abc import AsyncIterator
 from urllib.parse import quote
 
 import httpx
@@ -53,3 +55,44 @@ class Gateway:
 
     async def close(self) -> None:
         await self._client.aclose()
+
+    async def metrics(self) -> str:
+        try:
+            r = await self._client.get(f"{self.base_url}/metrics")
+            return r.text if r.status_code == 200 else ""
+        except httpx.HTTPError:
+            return ""
+
+    async def events(self) -> AsyncIterator[dict]:
+        async with self._client.stream(
+            "GET",
+            f"{self.base_url}/api/events",
+            timeout=httpx.Timeout(None, connect=5.0),
+        ) as r:
+            async for line in r.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                try:
+                    yield json.loads(line[5:])
+                except json.JSONDecodeError:
+                    continue
+
+    async def logs_stream(self) -> AsyncIterator[bytes]:
+        async with self._client.stream(
+            "GET",
+            f"{self.base_url}/logs/stream",
+            timeout=httpx.Timeout(None, connect=5.0),
+        ) as r:
+            async for chunk in r.aiter_bytes():
+                yield chunk
+
+    async def chat_stream(self, body: bytes) -> AsyncIterator[bytes]:
+        async with self._client.stream(
+            "POST",
+            f"{self.base_url}/v1/chat/completions",
+            content=body,
+            headers={"Content-Type": "application/json"},
+            timeout=httpx.Timeout(600.0, connect=300.0),
+        ) as r:
+            async for chunk in r.aiter_bytes():
+                yield chunk
