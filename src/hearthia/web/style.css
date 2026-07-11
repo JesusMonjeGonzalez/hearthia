@@ -285,20 +285,21 @@ details.reasoning .rbody { color: var(--dim); font-size: 12.5px; white-space: pr
   .msg { max-width: 95%; }
 }
 
-/* ── ember state colors ── */
-.state.ember-warm { color: var(--ember-warm); }
-.state.ember-kindling { color: var(--ember-kindling); animation: pulse 1.5s ease-in-out infinite; }
-.state.ember-cooling { color: var(--ember-cooling); }
-.state.ember-cold { color: var(--ember-cold); }
+/* ── ember state badges (pills with background, like original) ── */
+.state.ember-warm { color: #241a08; background: var(--ember-warm); }
+.state.ember-kindling { color: #2a1606; background: var(--ember-kindling); animation: pulse 1.5s ease-in-out infinite; }
+.state.ember-cooling { color: var(--ember-cooling); background: #2a1212; }
+.state.ember-cold { color: var(--ember-cold); background: var(--panel-2); }
 
-.card.ember-warm { border-color: var(--amber-dim); box-shadow: 0 0 12px rgba(232, 163, 61, 0.15); }
-.card.ember-kindling { border-color: var(--ember-kindling); opacity: 0.95; }
-.card.ember-cooling { border-color: var(--ember-cooling); }
+/* ── card ember glow ── */
+.card.ember-warm { border-color: var(--amber-dim); box-shadow: 0 0 0 1px var(--amber-dim), 0 0 20px rgba(232, 163, 61, 0.08); }
+.card.ember-kindling { border-color: rgba(232, 117, 61, 0.5); box-shadow: 0 0 0 1px rgba(232, 117, 61, 0.3); }
+.card.ember-cooling { border-color: rgba(232, 61, 61, 0.4); }
 .card.ember-cold { border-color: var(--line); }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
+  50% { opacity: 0.65; }
 }
 
 .memseg.model.starting { background: var(--ember-kindling); animation: pulse 1.5s ease-in-out infinite; }
@@ -307,22 +308,11 @@ details.reasoning .rbody { color: var(--dim); font-size: 12.5px; white-space: pr
 /* ── TTL countdown ring ── */
 .ttl-ring {
   display: inline-block;
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   vertical-align: middle;
-  margin-right: 4px;
+  margin-right: 6px;
+  flex-shrink: 0;
 }
-.ttl-wrap {
-  display: inline-flex;
-  align-items: center;
-  vertical-align: middle;
-}
-.unload-dd {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.countdown {
-  color: var(--amber);
-  font-variant-numeric: tabular-nums;
-}
+.ttl-ring circle { transition: stroke-dashoffset 0.9s linear, stroke 0.3s; }
+.ttl-ring text { transition: fill 0.3s; }

@@ -79,11 +79,29 @@ function ttlRingSVG(left, total) {
   const color = pct > 0.5 ? "#E8A33D" : pct > 0.2 ? "#E8753D" : "#E83D3D";
   return `<svg class="ttl-ring" viewBox="0 0 32 32">
     <circle cx="16" cy="16" r="${r}" fill="none" stroke="#262D37" stroke-width="3"/>
-    <circle cx="16" cy="16" r="${r}" fill="none" stroke="${color}" stroke-width="3"
+    <circle class="ttl-arc" cx="16" cy="16" r="${r}" fill="none" stroke="${color}" stroke-width="3"
       stroke-dasharray="${circ}" stroke-dashoffset="${offset}"
       transform="rotate(-90 16 16)"/>
-    <text x="16" y="20" text-anchor="middle" font-size="9" fill="${color}">${Math.ceil(left)}s</text>
+    <text class="ttl-text" x="16" y="20" text-anchor="middle" font-size="9" fill="${color}">${Math.ceil(left)}s</text>
   </svg>`;
+}
+
+function updateTtlRing(svg, left, total) {
+  const pct = Math.max(0, Math.min(1, left / total));
+  const r = 14;
+  const circ = 2 * Math.PI * r;
+  const offset = circ * (1 - pct);
+  const color = pct > 0.5 ? "#E8A33D" : pct > 0.2 ? "#E8753D" : "#E83D3D";
+  const arc = svg.querySelector(".ttl-arc");
+  const text = svg.querySelector(".ttl-text");
+  if (arc) {
+    arc.style.strokeDashoffset = offset;
+    arc.style.stroke = color;
+  }
+  if (text) {
+    text.textContent = `${Math.ceil(left)}s`;
+    text.style.fill = color;
+  }
 }
 
 export async function refreshModels() {
@@ -111,6 +129,14 @@ export async function refreshModels() {
       const perf = m.tok_s
         ? `${m.tok_s.toFixed(1)} tok/s gen${m.prompt_tok_s ? " · " + m.prompt_tok_s.toFixed(0) + " tok/s prompt" : ""}`
         : "–";
+      const lifecycleTxt = m.roles && m.roles.length
+        ? "🔗 " + m.roles.map(esc).join(", ")
+        : "";
+      const unloadTxt = lifecycleTxt
+        ? lifecycleTxt
+        : m.ttl
+          ? "after " + m.ttl + " s idle"
+          : "never";
       card.innerHTML = `
         <div class="card-head"><h3>${esc(m.name)}</h3>
           <span class="state ember-${esc(emberState)}">${esc(emberState)}</span></div>
@@ -119,8 +145,7 @@ export async function refreshModels() {
           <dt>id</dt><dd>${esc(m.id)}${m.aliases.length ? " · " + m.aliases.map(esc).join(", ") : ""}</dd>
           <dt>context</dt><dd>${m.ctx ? m.ctx.toLocaleString() + " tokens" : "model default"}</dd>
           <dt>last speed</dt><dd class="perf">${perf}</dd>
-          <dt class="unload-dd" data-ttl="${m.ttl || 0}" data-last="${m.last_activity || 0}">
-            <span class="ttl-wrap"></span>${m.ttl ? "ttl " + m.ttl + "s" : "managed"}</dt>
+          <dt>auto-unload</dt><dd class="unload-dd" data-ttl="${m.ttl || 0}" data-last="${m.last_activity || 0}" data-lifecycle="${lifecycleTxt ? 1 : 0}"><span class="ttl-wrap"></span>${esc(unloadTxt)}</dd>
           <dt>weights</dt><dd>${m.size ? fmtGB(m.size) : "–"}</dd>
         </dl>
         ${m.file_exists ? "" : `<div class="missing">weights file missing — still downloading?</div>`}
@@ -178,7 +203,8 @@ export async function refreshModels() {
   } catch {}
 }
 
-/* TTL countdown ticker with ember-state rings: 1 s resolution, no network */
+/* TTL countdown ticker: 1 s resolution, no network.
+   Updates the SVG ring in place (no flicker) and the countdown text. */
 setInterval(() => {
   const now = Date.now() / 1000;
   document.querySelectorAll(".card").forEach((card) => {
@@ -187,18 +213,36 @@ setInterval(() => {
     const dd = card.querySelector(".unload-dd");
     const ringWrap = card.querySelector(".ttl-wrap");
     if (!dd || !ringWrap) return;
+    const hasLifecycle = dd.dataset.lifecycle === "1";
+    if (hasLifecycle) return;
     if (m.state !== "stopped" && m.ttl && m.last_activity) {
       const left = m.ttl - (now - m.last_activity);
       if (left > 0) {
-        ringWrap.innerHTML = ttlRingSVG(left, m.ttl);
-        dd.lastChild.textContent = ` · unloads in ${fmtClock(left)}`;
+        const existing = ringWrap.querySelector("svg.ttl-ring");
+        if (existing) {
+          updateTtlRing(existing, left, m.ttl);
+        } else {
+          ringWrap.innerHTML = ttlRingSVG(left, m.ttl);
+        }
+        const textNode = dd.lastChild;
+        if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+          textNode.textContent = ` · unloads in ${fmtClock(left)}`;
+        } else {
+          dd.appendChild(document.createTextNode(` · unloads in ${fmtClock(left)}`));
+        }
       } else {
         ringWrap.innerHTML = "";
-        dd.lastChild.textContent = " · cooling…";
+        const textNode = dd.lastChild;
+        if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+          textNode.textContent = " · cooling…";
+        }
       }
     } else {
-      ringWrap.innerHTML = "";
-      dd.lastChild.textContent = "";
+      if (ringWrap.firstChild) ringWrap.innerHTML = "";
+      const textNode = dd.lastChild;
+      if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+        textNode.textContent = m.ttl ? "after " + m.ttl + " s idle" : "never";
+      }
     }
   });
 }, 1000);
