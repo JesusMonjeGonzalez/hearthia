@@ -14,6 +14,10 @@ export async function refreshStatus() {
     const s = await api("/api/status");
     lastStatus = s;
     $("#swap-dot").classList.toggle("up", s.swap_up);
+    document.body.classList.toggle(
+      "hearth-warm",
+      s.running.some((m) => m.state === "ready"),
+    );
     const sys = s.system;
     const models = s.running.filter((m) => m.rss);
     const modelBytes = models.reduce((a, m) => a + m.rss, 0);
@@ -78,7 +82,7 @@ function ttlRingSVG(left, total) {
   const offset = circ * (1 - pct);
   const color = pct > 0.5 ? "#E8A33D" : pct > 0.2 ? "#E8753D" : "#E83D3D";
   return `<svg class="ttl-ring" viewBox="0 0 32 32">
-    <circle cx="16" cy="16" r="${r}" fill="none" stroke="#262D37" stroke-width="3"/>
+    <circle cx="16" cy="16" r="${r}" fill="none" stroke="#2c261e" stroke-width="3"/>
     <circle class="ttl-arc" cx="16" cy="16" r="${r}" fill="none" stroke="${color}" stroke-width="3"
       stroke-dasharray="${circ}" stroke-dashoffset="${offset}"
       transform="rotate(-90 16 16)"/>
@@ -158,7 +162,7 @@ export async function refreshModels() {
         ${m.file_exists ? "" : `<div class="missing">weights file missing — still downloading?</div>`}
         <div class="card-actions">
           <button class="btn btn-primary act-load" ${m.state !== "stopped" || !m.file_exists ? "disabled" : ""}>Warm</button>
-          <button class="btn btn-danger act-unload" ${m.state === "stopped" ? "disabled" : ""}>Cool</button>
+          <button class="btn btn-cool act-unload" ${m.state === "stopped" ? "disabled" : ""}>Cool</button>
           <button class="btn btn-quiet act-settings" title="TTL, context, temperature">Settings</button>
         </div>
         <form class="card-settings" hidden>

@@ -59,7 +59,7 @@ function renderConv() {
   const c = activeConv();
   $("#chat-stats").textContent = "";
   if (!c || !c.messages.length) {
-    log.innerHTML = `<div class="empty">No messages yet. The first message loads the model into RAM automatically.</div>`;
+    log.innerHTML = `<div class="empty">The hearth is quiet. Your first message warms the model into RAM.</div>`;
   } else {
     for (const m of c.messages) addMsg(m.role, m.content, m.reasoning);
   }
