@@ -167,12 +167,15 @@ async def test_patch_settings_unknown_model_404(config_path, backups_dir):
 
 
 @respx.mock
-async def test_patch_settings_model_without_ttl_400(config_path, backups_dir):
+async def test_patch_settings_adds_ttl_when_missing(config_path, backups_dir):
+    """Lifecycle-managed models start without a ttl key; the editor can add one."""
     respx.get(f"{BASE}/running").respond(200, json={"running": []})
     app = _app(config_path, backups_dir)
     async with await _client(app) as client:
         r = await client.patch("/api/models/tiny-embed/settings", json={"ttl": 100})
-    assert r.status_code == 400
+    assert r.status_code == 200
+    m = {x.id: x for x in app.state.registry.models()}["tiny-embed"]
+    assert m.ttl == 100
     await app.state.gateway.close()
 
 
@@ -194,4 +197,44 @@ async def test_status_matches_rss_by_gguf_basename(config_path, backups_dir, mon
     async with await _client(app) as client:
         r = await client.get("/api/status")
     assert r.json()["running"][0]["rss"] == 12345
+    await app.state.gateway.close()
+
+
+async def test_add_model_endpoint(config_path, backups_dir):
+    gguf = config_path.parent / "fresh.gguf"
+    gguf.write_bytes(b"x")
+    app = _app(config_path, backups_dir)
+    async with await _client(app) as client:
+        r = await client.post(
+            "/api/models/add",
+            json={"id": "fresh", "name": "Fresh", "file": "fresh.gguf", "ctx": 8192, "ttl": 120},
+        )
+    assert r.status_code == 200
+    assert r.json()["restart_required"] is True
+    reg = app.state.registry
+    m = {x.id: x for x in reg.models()}["fresh"]
+    assert m.ttl == 120
+    assert m.roles == ("chat",)
+    await app.state.gateway.close()
+
+
+async def test_add_model_endpoint_duplicate_409(config_path, backups_dir):
+    gguf = config_path.parent / "big.gguf"
+    gguf.write_bytes(b"x")
+    app = _app(config_path, backups_dir)
+    async with await _client(app) as client:
+        r = await client.post(
+            "/api/models/add", json={"id": "big-coder", "name": "Dup", "file": "big.gguf"}
+        )
+    assert r.status_code == 409
+    await app.state.gateway.close()
+
+
+async def test_add_model_endpoint_missing_file_404(config_path, backups_dir):
+    app = _app(config_path, backups_dir)
+    async with await _client(app) as client:
+        r = await client.post(
+            "/api/models/add", json={"id": "ghost", "name": "G", "file": "ghost.gguf"}
+        )
+    assert r.status_code == 404
     await app.state.gateway.close()

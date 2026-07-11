@@ -17,9 +17,49 @@ def test_set_ttl_unknown_model_raises(config_path, backups_dir):
         Registry(config_path, backups_dir).set_ttl("nope", 1)
 
 
-def test_set_ttl_model_without_ttl_raises(config_path, backups_dir):
+def test_add_model_inserts_block_with_roles(config_path, backups_dir):
+    reg = Registry(config_path, backups_dir)
+    reg.add_model(
+        "new-chat",
+        name="New Chat",
+        gguf_path="/tmp/models/new.gguf",
+        ctx=16384,
+        ttl=450,
+        roles=("chat",),
+        aliases=("newbie",),
+        description="A new model.",
+    )
+    models = {m.id: m for m in reg.models()}
+    m = models["new-chat"]
+    assert m.name == "New Chat"
+    assert m.ttl == 450
+    assert m.ctx == 16384
+    assert m.roles == ("chat",)
+    assert m.aliases == ("newbie",)
+    assert str(m.file) == "/tmp/models/new.gguf"
+    # comments elsewhere survive the round-trip
+    assert "# the flagship" in config_path.read_text()
+
+
+def test_add_model_substitutes_models_dir_macro(config_path, backups_dir):
+    reg = Registry(config_path, backups_dir)
+    reg.add_model("macro-model", name="M", gguf_path="/tmp/models/m.gguf")
+    raw = config_path.read_text()
+    assert "${models_dir}/m.gguf" in raw
+
+
+def test_add_model_duplicate_id_raises(config_path, backups_dir):
+    reg = Registry(config_path, backups_dir)
     with pytest.raises(KeyError):
-        Registry(config_path, backups_dir).set_ttl("tiny-embed", 1)
+        reg.add_model("big-coder", name="Dup", gguf_path="/tmp/models/x.gguf")
+
+
+def test_set_ttl_adds_key_when_missing(config_path, backups_dir):
+    """Lifecycle-managed models have no ttl key; the editor must be able to add one."""
+    reg = Registry(config_path, backups_dir)
+    reg.set_ttl("tiny-embed", 120)
+    models = {m.id: m for m in reg.models()}
+    assert models["tiny-embed"].ttl == 120
 
 
 def test_set_cmd_flag_edits_only_that_flag(config_path, backups_dir):

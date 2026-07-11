@@ -108,10 +108,14 @@ def _manager(request: Request) -> DownloadManager:
 @router.get("/files")
 async def list_files(request: Request):
     models_dir = request.app.state.settings.paths.models_dir
+    reg = request.app.state.registry
+    configured = {m.file.name for m in reg.models() if m.file}
     files = []
     if models_dir and models_dir.exists():
         for f in sorted(models_dir.glob("*.gguf")):
-            files.append({"name": f.name, "size": f.stat().st_size})
+            files.append(
+                {"name": f.name, "size": f.stat().st_size, "configured": f.name in configured}
+            )
     return {"files": files}
 
 

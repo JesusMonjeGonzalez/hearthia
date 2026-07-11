@@ -1,7 +1,7 @@
 /* library.js — on-disk files, HF search, downloads. */
 
 import { $, api, GB, fmtGB, esc } from "./api.js";
-import { getStatus } from "./models.js";
+import { getStatus, refreshAll } from "./models.js";
 
 function fitBadge(size) {
   const lastStatus = getStatus();
@@ -20,9 +20,11 @@ export async function refreshFiles() {
     const row = document.createElement("div");
     row.className = "file-row";
     row.innerHTML = `<span class="name" title="${esc(f.name)}">${esc(f.name)}</span>
+      ${f.configured ? `<span class="fit ok">in config</span>` : ""}
       <span class="size">${fmtGB(f.size)}</span>
-      <button class="btn btn-quiet btn-danger">Delete</button>`;
-    row.querySelector("button").addEventListener("click", async () => {
+      ${f.configured ? "" : `<button class="btn btn-primary act-add">Add to config</button>`}
+      <button class="btn btn-quiet btn-danger act-del">Delete</button>`;
+    row.querySelector(".act-del").addEventListener("click", async () => {
       if (!confirm(`Delete ${f.name} from disk?`)) return;
       try {
         await api(`/api/files/${encodeURIComponent(f.name)}`, { method: "DELETE" });
@@ -32,6 +34,48 @@ export async function refreshFiles() {
       refreshFiles();
     });
     wrap.appendChild(row);
+    if (!f.configured) {
+      const stem = f.name.replace(/\.gguf$/, "");
+      const form = document.createElement("form");
+      form.className = "file-add-form";
+      form.hidden = true;
+      form.innerHTML = `
+        <label>id<input name="id" value="${esc(stem.toLowerCase().replace(/ /g, "-"))}" required></label>
+        <label>name<input name="name" value="${esc(stem)}"></label>
+        <label>context<input name="ctx" type="number" min="1024" step="1024" value="32768"></label>
+        <label>ttl (s)<input name="ttl" type="number" min="0" step="60" value="600"></label>
+        <button class="btn btn-primary" type="submit">Add &amp; restart</button>`;
+      row.querySelector(".act-add").addEventListener("click", () => (form.hidden = !form.hidden));
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(form);
+        const btn = form.querySelector("button[type=submit]");
+        btn.textContent = "Adding…";
+        btn.disabled = true;
+        try {
+          await api("/api/models/add", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              id: fd.get("id"),
+              name: fd.get("name"),
+              file: f.name,
+              ctx: Number(fd.get("ctx")) || undefined,
+              ttl: Number(fd.get("ttl")) || undefined,
+            }),
+          });
+          btn.textContent = "Restarting gateway…";
+          await api("/api/swap/restart", { method: "POST" });
+          refreshFiles();
+          refreshAll();
+        } catch (err) {
+          btn.textContent = "Add & restart";
+          btn.disabled = false;
+          alert(err.message);
+        }
+      });
+      wrap.appendChild(form);
+    }
   }
 }
 

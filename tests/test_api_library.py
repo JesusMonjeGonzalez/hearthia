@@ -170,3 +170,16 @@ def _manager_from_app(app):
             self.app = app
 
     return _manager(FakeRequest(app))
+
+
+async def test_files_marks_configured(config_path, backups_dir):
+    """The UI needs to know which files already back a configured model."""
+    (config_path.parent / "big.gguf").write_bytes(b"x")  # used by big-coder via macro
+    (config_path.parent / "loose.gguf").write_bytes(b"y")
+    app = _app(config_path, backups_dir)
+    async with await _client(app) as client:
+        r = await client.get("/api/files")
+    by_name = {f["name"]: f for f in r.json()["files"]}
+    assert by_name["big.gguf"]["configured"] is True
+    assert by_name["loose.gguf"]["configured"] is False
+    await app.state.gateway.close()

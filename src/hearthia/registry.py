@@ -82,9 +82,58 @@ class Registry:
     def set_ttl(self, model_id: str, ttl: int) -> None:
         doc = self.load()
         block = self._model_block(doc, model_id)
-        if "ttl" not in block:
-            raise KeyError(f"model '{model_id}' has no ttl field")
         block["ttl"] = int(ttl)
+        self.save(doc)
+
+    def add_model(
+        self,
+        model_id: str,
+        name: str,
+        gguf_path: str,
+        ctx: int = 32768,
+        ttl: int | None = 600,
+        roles: tuple[str, ...] = ("chat",),
+        aliases: tuple[str, ...] = (),
+        description: str = "",
+    ) -> None:
+        """Insert a generated model block. Comments elsewhere survive (ruamel round-trip)."""
+        from ruamel.yaml.scalarstring import LiteralScalarString
+
+        doc = self.load()
+        models = doc.setdefault("models", {})
+        if model_id in models:
+            raise KeyError(f"model '{model_id}' already exists in {self.config_path.name}")
+
+        macros = doc.get("macros") or {}
+        path = gguf_path
+        models_dir = str(macros.get("models_dir", ""))
+        if models_dir and path.startswith(models_dir + "/"):
+            path = "${models_dir}" + path[len(models_dir) :]
+        server = "${llama-server}" if "llama-server" in macros else "llama-server"
+
+        cmd_lines = [
+            server,
+            "--port ${PORT}",
+            f"--model {path}",
+            f"--ctx-size {ctx}",
+            "--n-gpu-layers 999",
+            "--flash-attn on",
+            "--cache-type-k q8_0",
+            "--cache-type-v q8_0",
+            "--metrics",
+        ]
+        block: dict[str, Any] = {
+            "name": name,
+            "description": description,
+            "cmd": LiteralScalarString("\n".join(cmd_lines) + "\n"),
+        }
+        if ttl:
+            block["ttl"] = int(ttl)
+        if aliases:
+            block["aliases"] = list(aliases)
+        if roles:
+            block["metadata"] = {"roles": list(roles)}
+        models[model_id] = block
         self.save(doc)
 
     def set_cmd_flag(self, model_id: str, flag: str, value: str) -> None:

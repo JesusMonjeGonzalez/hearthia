@@ -125,6 +125,41 @@ async def unload_all(request: Request):
     return {"ok": True}
 
 
+@router.post("/models/add")
+async def add_model(request: Request):
+    reg = request.app.state.registry
+    s = request.app.state.settings
+    body = await request.json()
+
+    model_id = str(body.get("id", "")).strip()
+    name = str(body.get("name", "")).strip() or model_id
+    fname = str(body.get("file", "")).strip()
+    if not model_id or not fname:
+        raise HTTPException(400, "id and file are required")
+
+    gguf = Path(fname) if "/" in fname else s.paths.models_dir / fname
+    if ".." in gguf.parts:
+        raise HTTPException(400, "bad file path")
+    if not gguf.exists():
+        raise HTTPException(404, f"weights file not found: {gguf}")
+
+    try:
+        reg.add_model(
+            model_id,
+            name=name,
+            gguf_path=str(gguf),
+            ctx=int(body.get("ctx") or 32768),
+            ttl=int(body["ttl"]) if body.get("ttl") else None,
+            roles=tuple(body.get("roles") or ("chat",)),
+            aliases=tuple(body.get("aliases") or ()),
+            description=str(body.get("description", "")),
+        )
+    except KeyError as e:
+        raise HTTPException(409, str(e)) from e
+
+    return {"ok": True, "restart_required": True}
+
+
 @router.patch("/models/{model_id}/settings")
 async def patch_settings(model_id: str, request: Request):
     reg = request.app.state.registry

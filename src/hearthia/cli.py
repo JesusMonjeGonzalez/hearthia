@@ -320,6 +320,8 @@ def pull(
     repo: str = typer.Argument(..., help="HuggingFace repo, e.g. unsloth/Qwen3.6-35B-A3B-GGUF"),
     quant: str = typer.Option("", "--quant", help="Quant filter, e.g. Q4_K_XL"),
     list_only: bool = typer.Option(False, "--list", help="List available quants, don't download."),
+    add: bool = typer.Option(False, "--add", help="Add the model to the config after download."),
+    model_id: str = typer.Option("", "--id", help="Model id for --add (default: from filename)."),
 ) -> None:
     """Download a model from HuggingFace with SHA-256 verification."""
     import httpx
@@ -388,7 +390,17 @@ def pull(
                     )
                 raise typer.Exit(1)
             typer.echo(f"verified  {dest}  ({result['bytes'] / 2**30:.1f} GiB)")
-            typer.echo(f"add to config: hearth models  (or edit {s.paths.gateway_config})")
+            if add:
+                mid = model_id or dest.stem.lower().replace(" ", "-")
+                try:
+                    _registry(s).add_model(mid, name=dest.stem, gguf_path=str(dest))
+                except KeyError as e:
+                    typer.echo(str(e))
+                    raise typer.Exit(1) from e
+                typer.echo(f"added '{mid}' to {s.paths.gateway_config.name}")
+                typer.echo("apply it: hearth restart gateway")
+            else:
+                typer.echo(f"add to config: hearth pull --add  (or edit {s.paths.gateway_config})")
 
     asyncio.run(run())
 
