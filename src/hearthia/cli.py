@@ -305,6 +305,8 @@ def migrate() -> None:
     typer.echo(f"  adopted     {result['adopted_stack_dir']}")
     typer.echo(f"  config      {result['config_written']}")
 
+    # re-read: migrate_from_llmstack just wrote the config the plists must point at
+    s = Settings()
     installed = install_plists(s)
     for label in installed:
         typer.echo(f"  installed   {label}")
@@ -516,3 +518,7 @@ def brain_status() -> None:
     typer.echo(f"  vault   {stats['vault']}")
     typer.echo(f"  files   {stats['files']}")
     typer.echo(f"  chunks  {stats['chunks']}")
+
+
+if __name__ == "__main__":
+    app()
