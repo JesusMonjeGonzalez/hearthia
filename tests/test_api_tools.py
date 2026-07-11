@@ -88,3 +88,20 @@ async def test_write_file_roundtrip(tmp_path):
     out = await execute_tool(_call("write_file", path=str(target), content="hello"))
     assert "5" in out
     assert target.read_text() == "hello"
+
+
+async def test_search_notes_uses_injected_searcher():
+    async def fake(query: str, k: int) -> str:
+        return f"NOTES({query},{k})"
+
+    out = await execute_tool(_call("search_notes", query="hearthia", k=3), notes_search=fake)
+    assert out == "NOTES(hearthia,3)"
+
+
+async def test_search_notes_without_brain_configured():
+    out = await execute_tool(_call("search_notes", query="x"))
+    assert "not available" in out
+
+
+def test_search_notes_in_schema():
+    assert "search_notes" in {t["function"]["name"] for t in TOOLS}

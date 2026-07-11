@@ -116,6 +116,24 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_notes",
+            "description": (
+                "Semantic search over the user's personal notes (Obsidian vault). "
+                "Use for questions about the user's own projects, ideas, people or plans."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "What to look for"},
+                    "k": {"type": "integer", "description": "Max results (default 6)"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
@@ -244,7 +262,7 @@ def _tree(path: Path, depth: int = 2, per_dir: int = 40, indent: str = "") -> li
     return lines
 
 
-async def execute_tool(tool_call: dict) -> str:
+async def execute_tool(tool_call: dict, *, notes_search=None) -> str:
     name = tool_call["function"]["name"]
     try:
         args = json.loads(tool_call["function"]["arguments"])
@@ -310,6 +328,14 @@ async def execute_tool(tool_call: dict) -> str:
         shown = "\n".join(sorted(hits)[:200])
         more = f"\n… and {len(hits) - 200} more" if len(hits) > 200 else ""
         return f"{len(hits)} files matching '{pattern}' in {root}\n{shown}{more}"
+
+    if name == "search_notes":
+        if notes_search is None:
+            return "Error: notes search not available (brain vault not configured)"
+        try:
+            return await notes_search(args["query"], int(args.get("k", 6)))
+        except Exception as e:
+            return f"Error searching notes: {e}"
 
     return f"Error: unknown tool '{name}'"
 

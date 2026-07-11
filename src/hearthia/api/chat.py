@@ -9,6 +9,7 @@ import asyncio
 import json
 from pathlib import Path
 
+import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
@@ -172,6 +173,30 @@ def _inject_context(messages: list[dict]) -> tuple[list[dict], list[str]]:
     return [{"role": "system", "content": ctx}, *messages], injected
 
 
+def _notes_searcher(state):
+    """Async searcher over the Brain index, or None when no vault is configured."""
+    s = state.settings
+    if getattr(s.brain, "vault", None) is None:
+        return None
+
+    async def searcher(query: str, k: int) -> str:
+        from hearthia.brain.indexer import BrainIndex
+        from hearthia.brain.search import search as brain_search
+
+        index = BrainIndex(s.paths.stack_dir / "brain-index.db", s.brain.vault)
+        try:
+            async with httpx.AsyncClient() as client:
+                res = await brain_search(index, client, query, s.gateway.url, k=k)
+        finally:
+            index.close()
+        hits = res.get("results", [])
+        if not hits:
+            return f"No notes matched '{query}'"
+        return "\n\n".join(f"[{h['score']}] {h['path']}\n{h['snippet']}" for h in hits)
+
+    return searcher
+
+
 @router.post("/chat")
 async def chat(request: Request):
     gw = request.app.state.gateway
@@ -184,6 +209,7 @@ async def chat(request: Request):
 
     messages = _ensure_tool_hint(messages)
     messages, injected_maps = _inject_context(messages)
+    notes_search = _notes_searcher(request.app.state)
 
     async def stream():
         nonlocal messages
@@ -227,7 +253,9 @@ async def chat(request: Request):
             results = dict(
                 zip(
                     [id(t) for t in fresh],
-                    await asyncio.gather(*[execute_tool(t) for t in fresh]),
+                    await asyncio.gather(
+                        *[execute_tool(t, notes_search=notes_search) for t in fresh]
+                    ),
                     strict=True,
                 )
             )
@@ -272,6 +300,7 @@ def _ensure_tool_hint(messages: list[dict]) -> list[dict]:
                 "files to find where something is defined.\n"
                 "- `list_dir` returns a 2-level tree plus README/manifest previews.\n"
                 "- `glob` finds files by name pattern; `write_file` creates/overwrites.\n"
+                "- `search_notes` searches the user's personal notes semantically.\n"
                 f"Use absolute paths under {home}/. Only use paths you have seen "
                 "in tool results or a provided project map — never guess paths.\n"
                 "If a 'Project map' is provided, trust it and skip exploratory "
