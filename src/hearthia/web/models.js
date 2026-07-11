@@ -109,6 +109,13 @@ export async function refreshModels() {
     const { models } = await api("/api/models");
     modelsCache = models;
     const wrap = $("#model-cards");
+    // skip the rebuild while the user is mid-interaction: recreating the cards
+    // would close an open settings form and steal focus from its inputs
+    const focused = document.activeElement;
+    const editing =
+      wrap.querySelector(".card-settings:not([hidden])") ||
+      (wrap.contains(focused) && focused.matches("input, select, textarea"));
+    if (editing) return;
     wrap.innerHTML = "";
     const sel = $("#chat-model");
     const cur = sel.value;
@@ -163,13 +170,22 @@ export async function refreshModels() {
       card.querySelector(".act-load").addEventListener("click", async (e) => {
         e.target.textContent = "Kindling…";
         e.target.disabled = true;
+        e.target.blur();
         try {
           await api(`/api/models/${m.id}/load`, { method: "POST" });
-        } catch {}
+        } catch (err) {
+          e.target.textContent = "Failed";
+          alert(`Load failed: ${err.message}`);
+        }
         refreshAll();
       });
-      card.querySelector(".act-unload").addEventListener("click", async () => {
-        await api(`/api/models/${m.id}/unload`, { method: "POST" });
+      card.querySelector(".act-unload").addEventListener("click", async (e) => {
+        e.target.blur();
+        try {
+          await api(`/api/models/${m.id}/unload`, { method: "POST" });
+        } catch (err) {
+          alert(`Unload failed: ${err.message}`);
+        }
         setTimeout(refreshAll, 500);
       });
       const form = card.querySelector(".card-settings");
@@ -248,7 +264,11 @@ setInterval(() => {
 }, 1000);
 
 $("#btn-unload-all").addEventListener("click", async () => {
-  await api("/api/models/unload-all", { method: "POST" });
+  try {
+    await api("/api/models/unload-all", { method: "POST" });
+  } catch (err) {
+    alert(`Cool down failed: ${err.message}`);
+  }
   setTimeout(refreshAll, 500);
 });
 

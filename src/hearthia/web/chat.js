@@ -104,10 +104,15 @@ $("#chat-form").addEventListener("submit", async (e) => {
   if (streaming) return;
   const text = $("#chat-input").value.trim();
   if (!text) return;
+  // read the toolbar before newConv(): renderConv() would wipe a system prompt
+  // the user typed while no conversation existed yet
+  const system = $("#chat-system").value.trim();
+  const model = $("#chat-model").value;
   if (!activeConv()) newConv();
   const c = activeConv();
-  c.system = $("#chat-system").value.trim();
-  c.model = $("#chat-model").value;
+  c.system = system;
+  c.model = model;
+  $("#chat-system").value = system;
   if (c.messages.length === 0) c.title = text.slice(0, 42);
 
   $("#chat-input").value = "";
@@ -161,6 +166,7 @@ $("#chat-form").addEventListener("submit", async (e) => {
       body: JSON.stringify(body),
       signal: aborter.signal,
     });
+    if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`);
     const reader = r.body.getReader();
     const dec = new TextDecoder();
     let buf = "",
@@ -204,7 +210,15 @@ $("#chat-form").addEventListener("submit", async (e) => {
   } catch (err) {
     if (err.name !== "AbortError") out += "\n`[request failed]` " + err.message;
   } finally {
-    redraw();
+    el.classList.remove("thinking");
+    if (out || reasoning) {
+      redraw();
+      // only real replies join the history — an empty assistant turn would be
+      // sent back to the model on the next message
+      c.messages.push({ role: "assistant", content: out, reasoning });
+    } else {
+      el.innerHTML = `<span class="msg-error">no reply — stopped, or the model failed to load (see Logs)</span>`;
+    }
     const rdetails = el.querySelector("details.reasoning");
     if (rdetails) rdetails.open = false;
     if (tFirst !== null && tokens > 0) {
@@ -212,7 +226,6 @@ $("#chat-form").addEventListener("submit", async (e) => {
       $("#chat-stats").textContent =
         `${(tokens / Math.max(gen, 0.001)).toFixed(1)} tok/s · first token ${((tFirst - tStart) / 1000).toFixed(1)}s`;
     }
-    c.messages.push({ role: "assistant", content: out, reasoning });
     saveConvs();
     streaming = false;
     aborter = null;

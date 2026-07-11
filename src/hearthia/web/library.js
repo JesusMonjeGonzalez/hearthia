@@ -50,7 +50,7 @@ export async function refreshDownloads() {
     row.className = "dl-row";
     row.innerHTML = `
       <div class="dl-head"><span class="name">${esc(d.file)}</span>
-        <span class="size">${d.state === "downloading" ? rate.toFixed(0) + " MB/s · " : ""}${fmtGB(d.bytes)}${d.total ? " / " + fmtGB(d.total) : ""} · ${esc(d.state)}</span>
+        <span class="size">${d.state === "downloading" ? rate.toFixed(0) + " MB/s · " : ""}${fmtGB(d.bytes)}${d.total ? " / " + fmtGB(d.total) : ""} · ${esc(d.state)}${d.error ? " — " + esc(d.error) : ""}</span>
         <button class="btn btn-quiet">${d.state === "downloading" ? "Cancel" : "Dismiss"}</button></div>
       <div class="dl-bar"><i style="width:${pct}%"></i></div>`;
     row.querySelector("button").addEventListener("click", async () => {
