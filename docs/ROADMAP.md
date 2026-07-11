@@ -6,9 +6,7 @@ improvements found while building. Publishing-related work (CI, releases,
 Homebrew tap) is tracked separately and excluded here.
 
 Updated: 2026-07-11 (evening). **Done since the morning list:** P1 items 1, 2,
-3, 5, 6 and P2 items 8, 9, 10, plus persistent chat sampling from P3. Still
-open: download resume (P1.4), configurable brain filing (P2.7), and the rest
-of P3 below.
+3, 5, 6 and P2 items 8, 9, 10, plus persistent chat sampling from P3. Later: download resume (P1.4) shipped with hearth pull CDN-redirect fix; E2E smoke script, README and CHANGELOG shipped. Still open: configurable brain filing (P2.7), pull progress, status TTL/tok_s, numpy fallback decision, parallel embed batches.
 
 ## P1 — spec features still missing
 
