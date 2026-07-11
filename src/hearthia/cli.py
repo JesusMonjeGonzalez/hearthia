@@ -126,6 +126,40 @@ def status() -> None:
 
 
 @app.command()
+def logs(
+    follow: bool = typer.Option(False, "-f", "--follow", help="Keep streaming new lines."),
+) -> None:
+    """Show llama-swap and model server logs (recent window; -f to follow)."""
+    import sys
+
+    s = Settings()
+
+    async def run() -> None:
+        gw = Gateway(s.gateway.url)
+        try:
+            stream = gw.logs_stream().__aiter__()
+            while True:
+                try:
+                    # llama-swap replays recent history first; without -f we stop
+                    # at the first pause after the replay
+                    timeout = None if follow else 1.0
+                    chunk = await asyncio.wait_for(stream.__anext__(), timeout=timeout)
+                except TimeoutError:
+                    break
+                except StopAsyncIteration:
+                    break
+                sys.stdout.buffer.write(chunk)
+                sys.stdout.flush()
+        finally:
+            await gw.close()
+
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        pass
+
+
+@app.command()
 def daemon(
     reload: bool = typer.Option(False, "--reload", help="Auto-restart on file changes."),
 ) -> None:

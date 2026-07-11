@@ -132,3 +132,9 @@ def test_brain_command_exists():
     assert "capture" in result.output.lower()
     assert "search" in result.output.lower()
     assert "reindex" in result.output.lower()
+
+
+def test_logs_command_exists():
+    result = runner.invoke(app, ["logs", "--help"])
+    assert result.exit_code == 0
+    assert "follow" in result.output.lower()
