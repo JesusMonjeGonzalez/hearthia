@@ -141,6 +141,17 @@ class Telemetry:
             except httpx.HTTPError:
                 continue
 
+    async def run_metrics_poller(self, interval: float = 5.0) -> None:
+        """Long-lived loop around poll_upstream_metrics for the daemon's lifespan."""
+        import asyncio
+
+        while True:
+            try:
+                await self.poll_upstream_metrics()
+            except Exception:  # noqa: BLE001 — a poll failure must not kill the loop
+                pass
+            await asyncio.sleep(interval)
+
     def snapshot(self) -> dict[str, dict]:
         """Return a shallow copy of the activity dict for routers."""
         return {k: dict(v) for k, v in self.activity.items()}

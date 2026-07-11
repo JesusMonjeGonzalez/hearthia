@@ -174,3 +174,24 @@ async def test_patch_settings_model_without_ttl_400(config_path, backups_dir):
         r = await client.patch("/api/models/tiny-embed/settings", json={"ttl": 100})
     assert r.status_code == 400
     await app.state.gateway.close()
+
+
+@respx.mock
+async def test_status_matches_rss_by_gguf_basename(config_path, backups_dir, monkeypatch):
+    """llama_server_procs reports the gguf as a full path; matching must use the basename."""
+    import hearthia.api.models as api_models
+
+    respx.get(f"{BASE}/health").respond(200)
+    respx.get(f"{BASE}/running").respond(
+        200, json={"running": [{"model": "big-coder", "state": "ready"}]}
+    )
+    monkeypatch.setattr(
+        api_models,
+        "llama_server_procs",
+        lambda: [{"pid": 1, "rss": 12345, "gguf": "/tmp/models/big.gguf"}],
+    )
+    app = _app(config_path, backups_dir)
+    async with await _client(app) as client:
+        r = await client.get("/api/status")
+    assert r.json()["running"][0]["rss"] == 12345
+    await app.state.gateway.close()

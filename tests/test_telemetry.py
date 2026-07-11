@@ -174,3 +174,23 @@ def test_snapshot_returns_copy():
     assert snap["big-coder"]["tok_s"] == 42.0
     snap["big-coder"]["tok_s"] = 999.0
     assert tel.activity["big-coder"]["tok_s"] == 42.0
+
+
+async def test_run_metrics_poller_polls_repeatedly(monkeypatch):
+    """The daemon runs the poller as a background task — it must loop, not run once."""
+    import asyncio
+
+    gw = Gateway("http://127.0.0.1:9292")
+    tel = Telemetry(gw)
+    calls = 0
+
+    async def fake_poll():
+        nonlocal calls
+        calls += 1
+
+    monkeypatch.setattr(tel, "poll_upstream_metrics", fake_poll)
+    task = asyncio.create_task(tel.run_metrics_poller(interval=0.01))
+    await asyncio.sleep(0.08)
+    task.cancel()
+    assert calls >= 3
+    await gw.close()

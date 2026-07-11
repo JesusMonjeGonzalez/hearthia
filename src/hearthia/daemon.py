@@ -43,7 +43,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         tasks = [
             asyncio.create_task(_safe_consume(tel.watch_events())),
-            asyncio.create_task(tel.poll_upstream_metrics()),
+            asyncio.create_task(tel.run_metrics_poller()),
             asyncio.create_task(engine.run()),
         ]
         try:

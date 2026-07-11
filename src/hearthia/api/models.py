@@ -2,6 +2,7 @@
 
 import shutil
 import time
+from pathlib import Path
 
 import psutil
 from fastapi import APIRouter, HTTPException, Request
@@ -33,7 +34,10 @@ async def status(request: Request):
         if m.file:
             by_file[m.file.name] = m.id
     for m in running:
-        proc = next((p for p in procs if by_file.get(p["gguf"]) == m.get("model")), None)
+        # llama_server_procs reports the gguf as the full --model path; key by basename
+        proc = next(
+            (p for p in procs if by_file.get(Path(p["gguf"]).name) == m.get("model")), None
+        )
         m["rss"] = proc["rss"] if proc else None
         act = tel.snapshot().get(m.get("model", ""), {})
         m["last_activity"] = act.get("last_activity")
