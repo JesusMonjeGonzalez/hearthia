@@ -1,4 +1,4 @@
-/* chat.js — conversation management, streaming chat. */
+/* chat.js — conversation management, streaming chat, file attachments. */
 
 import { $, api, esc, renderMD, highlightIn } from "./api.js";
 import { refreshStatus } from "./models.js";
@@ -9,6 +9,7 @@ let convs = JSON.parse(localStorage.getItem(LS_KEY) || "[]");
 let activeId = localStorage.getItem(LS_ACTIVE);
 let streaming = false;
 let aborter = null;
+let attachments = [];
 
 function saveConvs() {
   localStorage.setItem(LS_KEY, JSON.stringify(convs));
@@ -113,6 +114,77 @@ const LS_SAMPLING = "hearthia.sampling";
   });
 }
 
+/* ── file attachments ── */
+
+function renderAttachments() {
+  const el = $("#chat-attachments");
+  if (!attachments.length) {
+    el.innerHTML = "";
+    return;
+  }
+  el.innerHTML = attachments
+    .map(
+      (a, i) =>
+        `<span class="attach-badge">${esc(a.name || a.path.split("/").pop())} <button class="attach-rm" data-idx="${i}" title="Remove">×</button></span>`
+    )
+    .join("");
+  el.querySelectorAll(".attach-rm").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      attachments.splice(parseInt(btn.dataset.idx), 1);
+      renderAttachments();
+    })
+  );
+}
+
+$("#chat-attach").addEventListener("click", () => {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.multiple = true;
+  input.style.display = "none";
+  input.addEventListener("change", async () => {
+    for (const f of input.files) {
+      try {
+        const content = await f.text();
+        attachments.push({ name: f.name, path: f.name, content });
+      } catch (e) {
+        console.error("Failed to read file:", f.name, e);
+      }
+    }
+    renderAttachments();
+    // re-focus the textarea after file picker
+    $("#chat-input").focus();
+  });
+  input.click();
+});
+
+/* ── drag & drop on chat log ── */
+const chatLog = $("#chat-log");
+chatLog.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  chatLog.style.borderColor = "var(--amber)";
+});
+chatLog.addEventListener("dragleave", () => {
+  chatLog.style.borderColor = "";
+});
+chatLog.addEventListener("drop", (e) => {
+  e.preventDefault();
+  chatLog.style.borderColor = "";
+  for (const f of e.dataTransfer.files) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      attachments.push({ name: f.name, path: f.name, content: reader.result });
+      renderAttachments();
+    };
+    reader.readAsText(f);
+  }
+});
+
+/* ── drag & drop on chat form (file anywhere in the chat area) ── */
+$("#chat-form").addEventListener("dragover", (e) => e.preventDefault());
+$("#chat-form").addEventListener("drop", (e) => e.preventDefault());
+
+/* ── send / stop ── */
+
 $("#chat-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
@@ -126,9 +198,7 @@ $("#chat-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   if (streaming) return;
   const text = $("#chat-input").value.trim();
-  if (!text) return;
-  // read the toolbar before newConv(): renderConv() would wipe a system prompt
-  // the user typed while no conversation existed yet
+  if (!text && !attachments.length) return;
   const system = $("#chat-system").value.trim();
   const model = $("#chat-model").value;
   if (!activeConv()) newConv();
@@ -136,12 +206,24 @@ $("#chat-form").addEventListener("submit", async (e) => {
   c.system = system;
   c.model = model;
   $("#chat-system").value = system;
-  if (c.messages.length === 0) c.title = text.slice(0, 42);
+
+  /* build the user message — include attachment content */
+  let msgContent = text;
+  if (attachments.length) {
+    const blocks = attachments.map(
+      (a) => `File: ${a.name}\n\`\`\`\n${a.content}\n\`\`\``
+    );
+    msgContent = (text ? text + "\n\n" : "") + blocks.join("\n\n");
+  }
+
+  if (c.messages.length === 0) c.title = text.slice(0, 42) || "(attached files)";
 
   $("#chat-input").value = "";
   $("#chat-log").querySelector(".empty")?.remove();
-  c.messages.push({ role: "user", content: text });
-  addMsg("user", text);
+  c.messages.push({ role: "user", content: msgContent });
+  addMsg("user", text || `[${attachments.map((a) => a.name).join(", ")}]`);
+  attachments = [];
+  renderAttachments();
   saveConvs();
   renderConvList();
 
@@ -153,8 +235,6 @@ $("#chat-form").addEventListener("submit", async (e) => {
   if (c.system) messages.push({ role: "system", content: c.system });
   for (const m of c.messages) messages.push({ role: m.role, content: m.content });
 
-  // fall back to the first configured model if the select hadn't populated
-  // when this conversation was created — "" would 404 at the gateway
   const body = {
     model: c.model || $("#chat-model").options[0]?.value || "default",
     messages,
@@ -242,8 +322,6 @@ $("#chat-form").addEventListener("submit", async (e) => {
     el.classList.remove("thinking");
     if (out || reasoning) {
       redraw();
-      // only real replies join the history — an empty assistant turn would be
-      // sent back to the model on the next message
       c.messages.push({ role: "assistant", content: out, reasoning });
     } else {
       el.innerHTML = `<span class="msg-error">no reply — stopped, or the model failed to load (see Logs)</span>`;

@@ -305,11 +305,22 @@ details.reasoning {
 }
 details.reasoning summary { cursor: pointer; color: var(--dim); font: 11px var(--mono); letter-spacing: 0.06em; }
 details.reasoning .rbody { color: var(--dim); font-size: 12.5px; white-space: pre-wrap; margin-top: 6px; }
-.chat-form { display: flex; gap: 8px; margin-top: 10px; }
-.chat-form textarea {
+.chat-form { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.chat-input-row { display: flex; gap: 8px; }
+.chat-input-row textarea {
   flex: 1; resize: none; background: var(--panel); color: var(--text);
   border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font: 14px var(--sans);
 }
+.chat-attachments { display: flex; flex-wrap: wrap; gap: 6px; }
+.attach-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: var(--amber-deep); border: 1px solid var(--line-warm);
+  border-radius: 6px; padding: 3px 8px; font: 11px var(--mono); color: var(--amber-hi);
+}
+.attach-badge .attach-rm {
+  background: none; border: none; color: var(--dim); font-size: 14px; padding: 0 2px; cursor: pointer; line-height: 1;
+}
+.attach-badge .attach-rm:hover { color: var(--danger); }
 
 /* ── library ── */
 .lib-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; }

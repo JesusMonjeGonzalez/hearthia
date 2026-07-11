@@ -85,9 +85,13 @@
           <div class="empty">The hearth is quiet. Your first message warms the model into RAM.</div>
         </div>
         <form id="chat-form" class="chat-form">
-          <textarea id="chat-input" rows="2" placeholder="Ask the model… (Enter to send, Shift+Enter for newline)"></textarea>
-          <button type="submit" class="btn btn-primary" id="chat-send">Send</button>
-          <button type="button" class="btn btn-cool" id="chat-stop" hidden>Stop</button>
+          <div id="chat-attachments" class="chat-attachments"></div>
+          <div class="chat-input-row">
+            <textarea id="chat-input" rows="2" placeholder="Ask the model… (Enter to send, Shift+Enter for newline)"></textarea>
+            <button type="button" class="btn btn-quiet" id="chat-attach" title="Attach a file from disk">📎</button>
+            <button type="submit" class="btn btn-primary" id="chat-send">Send</button>
+            <button type="button" class="btn btn-cool" id="chat-stop" hidden>Stop</button>
+          </div>
         </form>
       </div>
     </div>

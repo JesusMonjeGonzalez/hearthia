@@ -86,6 +86,17 @@ class Gateway:
             async for chunk in r.aiter_bytes():
                 yield chunk
 
+    async def chat(self, body: dict) -> dict:
+        """Non-streaming chat completion. Returns the full JSON response."""
+        r = await self._client.post(
+            f"{self.base_url}/v1/chat/completions",
+            json=body,
+            headers={"Content-Type": "application/json"},
+            timeout=httpx.Timeout(600.0, connect=300.0),
+        )
+        r.raise_for_status()
+        return r.json()
+
     async def chat_stream(self, body: bytes) -> AsyncIterator[bytes]:
         async with self._client.stream(
             "POST",
