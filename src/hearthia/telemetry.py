@@ -94,9 +94,7 @@ class Telemetry:
                 try:
                     import json
 
-                    models: list[dict] = (
-                        data if isinstance(data, list) else json.loads(str(data))
-                    )
+                    models: list[dict] = data if isinstance(data, list) else json.loads(str(data))
                     now_running = {
                         m.get("model") or m.get("id", "")
                         for m in models

@@ -1,0 +1,143 @@
+"""API models router: status, models list, load/unload, patch settings."""
+
+import shutil
+import time
+
+import psutil
+from fastapi import APIRouter, HTTPException, Request
+
+from hearthia.telemetry import llama_server_procs, wired_limit_bytes
+
+router = APIRouter(prefix="/api")
+
+
+@router.get("/status")
+async def status(request: Request):
+    gw = request.app.state.gateway
+    reg = request.app.state.registry
+    tel = request.app.state.telemetry
+    s = request.app.state.settings
+
+    vm = psutil.virtual_memory()
+    swap_mem = psutil.swap_memory()
+    disk = shutil.disk_usage(str(s.paths.models_dir))
+
+    running: list = []
+    swap_up = await gw.is_up()
+    if swap_up:
+        running = await gw.running()
+
+    procs = llama_server_procs()
+    by_file: dict[str, str] = {}
+    for m in reg.models():
+        if m.file:
+            by_file[m.file.name] = m.id
+    for m in running:
+        proc = next((p for p in procs if by_file.get(p["gguf"]) == m.get("model")), None)
+        m["rss"] = proc["rss"] if proc else None
+        act = tel.snapshot().get(m.get("model", ""), {})
+        m["last_activity"] = act.get("last_activity")
+        m["tok_s"] = act.get("tok_s")
+
+    return {
+        "swap_up": swap_up,
+        "running": running,
+        "system": {
+            "ram_total": vm.total,
+            "wired_limit": wired_limit_bytes(vm.total),
+            "ram_used": vm.total - vm.available,
+            "ram_available": vm.available,
+            "ram_percent": vm.percent,
+            "swap_used": swap_mem.used,
+            "cpu_percent": psutil.cpu_percent(interval=None),
+            "disk_free": disk.free,
+        },
+        "time": time.time(),
+    }
+
+
+@router.get("/models")
+async def models(request: Request):
+    gw = request.app.state.gateway
+    reg = request.app.state.registry
+    tel = request.app.state.telemetry
+
+    running_ids: dict[str, str] = {}
+    for m in await gw.running():
+        running_ids[m.get("model", "")] = m.get("state", "unknown")
+
+    activity = tel.snapshot()
+    out = []
+    for model in reg.models():
+        f = model.file
+        size = f.stat().st_size if f and f.exists() else None
+        act = activity.get(model.id, {})
+        out.append(
+            {
+                "id": model.id,
+                "name": model.name,
+                "description": model.description,
+                "ttl": model.ttl,
+                "aliases": list(model.aliases),
+                "ctx": model.ctx,
+                "temp": model.temp,
+                "embedding": model.embedding,
+                "file": str(f) if f else None,
+                "file_exists": bool(f and f.exists()),
+                "size": size,
+                "state": running_ids.get(model.id, "stopped"),
+                "roles": list(model.roles),
+                "last_activity": act.get("last_activity"),
+                "tok_s": act.get("tok_s"),
+                "prompt_tok_s": act.get("prompt_tok_s"),
+            }
+        )
+    return {"models": out}
+
+
+@router.post("/models/{model_id}/load")
+async def load_model(model_id: str, request: Request):
+    gw = request.app.state.gateway
+    s = request.app.state.settings
+    ok = await gw.warm(model_id, timeout=s.gateway.health_timeout)
+    if not ok:
+        raise HTTPException(502, f"load failed for {model_id}")
+    return {"ok": True}
+
+
+@router.post("/models/{model_id}/unload")
+async def unload_model(model_id: str, request: Request):
+    gw = request.app.state.gateway
+    ok = await gw.cool(model_id)
+    if not ok:
+        raise HTTPException(502, f"unload failed for {model_id}")
+    return {"ok": True}
+
+
+@router.post("/models/unload-all")
+async def unload_all(request: Request):
+    gw = request.app.state.gateway
+    ok = await gw.cool(None)
+    if not ok:
+        raise HTTPException(502, "unload-all failed")
+    return {"ok": True}
+
+
+@router.patch("/models/{model_id}/settings")
+async def patch_settings(model_id: str, request: Request):
+    reg = request.app.state.registry
+    body = await request.json()
+
+    try:
+        if body.get("ttl") is not None:
+            reg.set_ttl(model_id, int(body["ttl"]))
+        if body.get("ctx") is not None:
+            reg.set_cmd_flag(model_id, "--ctx-size", str(body["ctx"]))
+        if body.get("temp") is not None:
+            reg.set_cmd_flag(model_id, "--temp", str(body["temp"]))
+    except KeyError as e:
+        if "not found" in str(e):
+            raise HTTPException(404, str(e)) from e
+        raise HTTPException(400, str(e)) from e
+
+    return {"ok": True, "restart_required": True}
