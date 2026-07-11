@@ -5,6 +5,7 @@ import { brainStatus } from "./brain.js";
 import { refreshFiles, refreshDownloads } from "./library.js";
 import { loadConfig } from "./config.js";
 import { startLogs } from "./logs.js";
+import "./chat.js"; // side-effect module: wires the whole Chat tab
 
 /* ── tabs ── */
 document.querySelectorAll(".tab").forEach((t) =>
@@ -13,6 +14,7 @@ document.querySelectorAll(".tab").forEach((t) =>
     document
       .querySelectorAll(".panel")
       .forEach((p) => p.classList.toggle("active", p.id === "tab-" + t.dataset.tab));
+    if (t.dataset.tab === "models") refreshAll();
     if (t.dataset.tab === "logs") startLogs();
     if (t.dataset.tab === "config") loadConfig();
     if (t.dataset.tab === "library") {
