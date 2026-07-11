@@ -1,6 +1,7 @@
 """hearth — the Hearthia command line."""
 
 import asyncio
+from pathlib import Path
 
 import psutil
 import typer
@@ -140,3 +141,171 @@ def daemon(
         reload=reload,
         log_level="warning",
     )
+
+
+@app.command()
+def install() -> None:
+    """Render launchd plists and bootstrap all Hearthia services."""
+    from hearthia.service import install_plists
+
+    s = Settings()
+    installed = install_plists(s)
+    for label in installed:
+        typer.echo(f"  installed  {label}")
+    typer.echo("hearth is tending the fire. (hearth doctor to verify)")
+
+
+@app.command()
+def uninstall() -> None:
+    """Bootout all Hearthia services and remove plist files."""
+    from hearthia.service import uninstall_plists
+
+    removed = uninstall_plists()
+    for label in removed:
+        typer.echo(f"  removed  {label}")
+    typer.echo("the fire is out.")
+
+
+@app.command()
+def up(service: str = typer.Argument("all", help="gateway | daemon | update | all")) -> None:
+    """Start a service (or all)."""
+    from hearthia.service import DAEMON_LABEL, GATEWAY_LABEL, UPDATE_LABEL
+
+    label_map = {"gateway": GATEWAY_LABEL, "daemon": DAEMON_LABEL, "update": UPDATE_LABEL}
+    targets = list(label_map.values()) if service == "all" else [label_map[service]]
+    uid = __import__("os").getuid()
+    import subprocess
+
+    launch_agents = __import__("pathlib").Path.home() / "Library" / "LaunchAgents"
+    for label in targets:
+        plist = launch_agents / f"{label}.plist"
+        if not plist.exists():
+            typer.echo(f"  {label} not installed — run 'hearth install' first")
+            raise typer.Exit(1)
+        subprocess.run(
+            ["launchctl", "bootstrap", f"gui/{uid}", str(plist)],
+            capture_output=True,
+            text=True,
+        )
+        typer.echo(f"  up  {label}")
+
+
+@app.command()
+def down(service: str = typer.Argument("all", help="gateway | daemon | update | all")) -> None:
+    """Stop a service (or all)."""
+    from hearthia.service import DAEMON_LABEL, GATEWAY_LABEL, UPDATE_LABEL
+
+    label_map = {"gateway": GATEWAY_LABEL, "daemon": DAEMON_LABEL, "update": UPDATE_LABEL}
+    targets = list(label_map.values()) if service == "all" else [label_map[service]]
+    uid = __import__("os").getuid()
+    import subprocess
+
+    for label in targets:
+        subprocess.run(
+            ["launchctl", "bootout", f"gui/{uid}/{label}"],
+            capture_output=True,
+            text=True,
+        )
+        typer.echo(f"  down  {label}")
+
+
+@app.command()
+def restart(service: str = typer.Argument("all", help="gateway | daemon | update | all")) -> None:
+    """Restart a service (or all)."""
+    from hearthia.service import DAEMON_LABEL, GATEWAY_LABEL, UPDATE_LABEL, restart_service
+
+    label_map = {"gateway": GATEWAY_LABEL, "daemon": DAEMON_LABEL, "update": UPDATE_LABEL}
+    targets = list(label_map.values()) if service == "all" else [label_map[service]]
+    for label in targets:
+        if restart_service(label):
+            typer.echo(f"  restarted  {label}")
+        else:
+            typer.echo(f"  FAILED  {label}")
+            raise typer.Exit(1)
+
+
+@app.command()
+def doctor() -> None:
+    """Check: llama.cpp present, ports free, wired limit, config valid, disk space."""
+    import shutil
+    import subprocess
+
+    s = Settings()
+    ok = True
+
+    gw_binary = shutil.which("llama-server") or str(s.gateway.binary)
+    if Path(gw_binary).exists():
+        typer.echo(f"  [OK]    llama-server  {gw_binary}")
+    else:
+        typer.echo(f"  [FAIL]  llama-server not found at {gw_binary}")
+        ok = False
+
+    swap_binary = shutil.which("llama-swap")
+    if swap_binary:
+        typer.echo(f"  [OK]    llama-swap   {swap_binary}")
+    else:
+        typer.echo("  [FAIL]  llama-swap not on PATH")
+        ok = False
+
+    if s.paths.gateway_config.exists():
+        typer.echo(f"  [OK]    config       {s.paths.gateway_config}")
+    else:
+        typer.echo(f"  [FAIL]  config not found at {s.paths.gateway_config}")
+        ok = False
+
+    vm = psutil.virtual_memory()
+    total_gib = vm.total / 2**30
+    avail_gib = vm.available / 2**30
+    typer.echo(f"  [INFO]  memory       {total_gib:.0f} GiB total, {avail_gib:.1f} GiB available")
+
+    try:
+        out = subprocess.run(
+            ["sysctl", "-n", "iogpu.wired_limit_mb"],
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        mb = int(out)
+        if mb > 0:
+            typer.echo(f"  [INFO]  wired limit  {mb} MB (sysctl override)")
+        else:
+            typer.echo(f"  [INFO]  wired limit  default (~{int(vm.total * 0.75 / 1024**2)} MB)")
+    except (ValueError, OSError):
+        typer.echo(f"  [INFO]  wired limit  default (~{int(vm.total * 0.75 / 1024**2)} MB)")
+
+    models_dir = s.paths.models_dir
+    if models_dir and models_dir.exists():
+        disk = shutil.disk_usage(str(models_dir))
+        typer.echo(f"  [INFO]  disk free    {disk.free / 2**30:.0f} GiB")
+    else:
+        typer.echo(f"  [WARN]  models dir   {models_dir} does not exist")
+
+    typer.echo(f"  [INFO]  gateway url  {s.gateway.url}")
+    typer.echo(f"  [INFO]  daemon url   http://{s.daemon.bind}:{s.daemon.port}")
+
+    if ok:
+        typer.echo("hearth is healthy.")
+    else:
+        typer.echo("issues found — fix the [FAIL] items above.")
+        raise typer.Exit(1)
+
+
+@app.command()
+def migrate() -> None:
+    """Adopt an existing ~/llm-stack: write config, bootout old services, install new."""
+    from hearthia.service import install_plists, migrate_from_llmstack
+
+    s = Settings()
+    result = migrate_from_llmstack(s)
+    if "error" in result:
+        typer.echo(result["error"])
+        raise typer.Exit(1)
+
+    for label in result.get("booted_out", []):
+        typer.echo(f"  booted out  {label}")
+    typer.echo(f"  adopted     {result['adopted_stack_dir']}")
+    typer.echo(f"  config      {result['config_written']}")
+
+    installed = install_plists(s)
+    for label in installed:
+        typer.echo(f"  installed   {label}")
+    typer.echo("migration complete. (hearth doctor to verify)")

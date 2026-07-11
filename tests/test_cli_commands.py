@@ -82,3 +82,39 @@ def test_daemon_command_exists():
     result = runner.invoke(app, ["daemon", "--help"])
     assert result.exit_code == 0
     assert "daemon" in result.output.lower()
+
+
+def test_install_command_exists():
+    result = runner.invoke(app, ["install", "--help"])
+    assert result.exit_code == 0
+    assert "install" in result.output.lower()
+
+
+def test_uninstall_command_exists():
+    result = runner.invoke(app, ["uninstall", "--help"])
+    assert result.exit_code == 0
+
+
+def test_up_command_exists():
+    result = runner.invoke(app, ["up", "--help"])
+    assert result.exit_code == 0
+
+
+def test_down_command_exists():
+    result = runner.invoke(app, ["down", "--help"])
+    assert result.exit_code == 0
+
+
+def test_restart_command_exists():
+    result = runner.invoke(app, ["restart", "--help"])
+    assert result.exit_code == 0
+
+
+def test_doctor_command_exists():
+    result = runner.invoke(app, ["doctor", "--help"])
+    assert result.exit_code == 0
+
+
+def test_migrate_command_exists():
+    result = runner.invoke(app, ["migrate", "--help"])
+    assert result.exit_code == 0
