@@ -2,9 +2,12 @@
 
 import { $, api, esc } from "./api.js";
 
+let vaultName = "";
+
 export async function brainStatus() {
   try {
     const s = await api("/api/brain/status");
+    vaultName = (s.vault || "").split("/").filter(Boolean).pop() || "";
     $("#brain-status").textContent = `${s.files} notes · ${s.chunks} chunks indexed · ${s.vault}`;
   } catch {}
 }
@@ -27,6 +30,7 @@ $("#brain-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const q = $("#brain-q").value.trim();
   if (!q) return;
+  if (!vaultName) brainStatus();
   const wrap = $("#brain-results");
   wrap.innerHTML = `<div class="empty">Searching (loads the embedding model if needed)…</div>`;
   try {
@@ -37,7 +41,7 @@ $("#brain-form").addEventListener("submit", async (e) => {
     for (const r of results) {
       const a = document.createElement("a");
       a.className = "brain-hit";
-      a.href = `obsidian://open?vault=Brain&file=${encodeURIComponent(r.path.replace(/\.md$/, ""))}`;
+      a.href = `obsidian://open?vault=${encodeURIComponent(vaultName || "Brain")}&file=${encodeURIComponent(r.path.replace(/\.md$/, ""))}`;
       a.innerHTML = `
         <div class="hit-head">
           <span class="hit-title">${esc(r.title)}</span>

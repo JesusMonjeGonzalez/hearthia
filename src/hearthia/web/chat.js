@@ -90,6 +90,29 @@ function addMsg(role, content, reasoning) {
 
 $("#conv-new").addEventListener("click", newConv);
 
+/* sampling settings + last model survive reloads */
+const LS_SAMPLING = "hearthia.sampling";
+{
+  const saved = JSON.parse(localStorage.getItem(LS_SAMPLING) || "{}");
+  const fields = { "#s-temp": "temp", "#s-topp": "top_p", "#s-maxtok": "max_tokens" };
+  for (const [sel, key] of Object.entries(fields)) {
+    if (saved[key] != null) $(sel).value = saved[key];
+    $(sel).addEventListener("change", () => {
+      const out = {};
+      for (const [s2, k2] of Object.entries(fields)) {
+        if ($(s2).value !== "") out[k2] = $(s2).value;
+      }
+      out.model = $("#chat-model").value;
+      localStorage.setItem(LS_SAMPLING, JSON.stringify(out));
+    });
+  }
+  $("#chat-model").addEventListener("change", () => {
+    const out = JSON.parse(localStorage.getItem(LS_SAMPLING) || "{}");
+    out.model = $("#chat-model").value;
+    localStorage.setItem(LS_SAMPLING, JSON.stringify(out));
+  });
+}
+
 $("#chat-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();

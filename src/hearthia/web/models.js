@@ -235,7 +235,12 @@ export async function refreshModels() {
       });
       wrap.appendChild(card);
     }
-    if (cur) sel.value = cur;
+    if (cur) {
+      sel.value = cur;
+    } else {
+      const saved = JSON.parse(localStorage.getItem("hearthia.sampling") || "{}");
+      if (saved.model) sel.value = saved.model;
+    }
   } catch {}
 }
 

@@ -23,8 +23,23 @@ async function saveConfig() {
   } catch (e) {
     msg.textContent = e.message;
     msg.className = "cfg-msg err";
+    jumpToErrorLine(e.message);
     return false;
   }
+}
+
+/* ruamel errors embed "line N, column M" — put the cursor there */
+function jumpToErrorLine(message) {
+  const m = message.match(/line (\d+)/);
+  if (!m) return;
+  const line = parseInt(m[1], 10);
+  const ed = $("#cfg-editor");
+  const lines = ed.value.split("\n");
+  const offset = lines.slice(0, line - 1).reduce((a, l) => a + l.length + 1, 0);
+  ed.focus();
+  ed.setSelectionRange(offset, offset + (lines[line - 1]?.length || 0));
+  const lineHeight = parseFloat(getComputedStyle(ed).lineHeight) || 21;
+  ed.scrollTop = Math.max(0, (line - 4) * lineHeight);
 }
 
 $("#cfg-save").addEventListener("click", saveConfig);
