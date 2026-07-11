@@ -118,3 +118,9 @@ def test_doctor_command_exists():
 def test_migrate_command_exists():
     result = runner.invoke(app, ["migrate", "--help"])
     assert result.exit_code == 0
+
+
+def test_pull_command_exists():
+    result = runner.invoke(app, ["pull", "--help"])
+    assert result.exit_code == 0
+    assert "pull" in result.output.lower()

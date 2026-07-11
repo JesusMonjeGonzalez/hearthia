@@ -309,3 +309,81 @@ def migrate() -> None:
     for label in installed:
         typer.echo(f"  installed   {label}")
     typer.echo("migration complete. (hearth doctor to verify)")
+
+
+@app.command()
+def pull(
+    repo: str = typer.Argument(..., help="HuggingFace repo, e.g. unsloth/Qwen3.6-35B-A3B-GGUF"),
+    quant: str = typer.Option("", "--quant", help="Quant filter, e.g. Q4_K_XL"),
+    list_only: bool = typer.Option(False, "--list", help="List available quants, don't download."),
+) -> None:
+    """Download a model from HuggingFace with SHA-256 verification."""
+    import httpx
+
+    from hearthia.library import download_file, fit_check, list_gguf_files
+    from hearthia.telemetry import wired_limit_bytes
+
+    s = Settings()
+
+    async def run() -> None:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(None)) as client:
+            files = await list_gguf_files(client, repo)
+            if not files:
+                typer.echo(f"no .gguf files found in {repo}")
+                raise typer.Exit(1)
+
+            if quant:
+                files = [f for f in files if quant.upper() in f.path.upper()]
+                if not files:
+                    typer.echo(f"no files matching --quant {quant} in {repo}")
+                    raise typer.Exit(1)
+
+            if list_only:
+                vm = psutil.virtual_memory()
+                wired = wired_limit_bytes(vm.total)
+                for f in sorted(files, key=lambda x: x.size):
+                    fits = "fits" if fit_check(f.size, vm.available, wired) else "TOO BIG"
+                    size_gib = f.size / 2**30
+                    typer.echo(f"  {f.path:50} {size_gib:6.1f} GiB  {fits}")
+                return
+
+            if len(files) > 1:
+                typer.echo("multiple files match, use --quant to pick one:")
+                for f in sorted(files, key=lambda x: x.size):
+                    typer.echo(f"  {f.path}  ({f.size / 2**30:.1f} GiB)")
+                raise typer.Exit(2)
+
+            target = files[0]
+            vm = psutil.virtual_memory()
+            wired = wired_limit_bytes(vm.total)
+            if not fit_check(target.size, vm.available, wired):
+                typer.echo(
+                    f"warning: {target.path} ({target.size / 2**30:.1f} GiB) "
+                    f"may not fit in available RAM ({vm.available / 2**30:.1f} GiB)"
+                )
+
+            models_dir = s.paths.models_dir
+            if models_dir is None:
+                typer.echo("models_dir not configured")
+                raise typer.Exit(1)
+            models_dir.mkdir(parents=True, exist_ok=True)
+            dest = models_dir / Path(target.path).name
+            typer.echo(f"pulling {target.path} ({target.size / 2**30:.1f} GiB)…")
+            result = await download_file(
+                client,
+                repo,
+                target.path,
+                dest,
+                expected_sha256=target.sha256,
+            )
+            if not result["ok"]:
+                if not result.get("verified", True):
+                    typer.echo(
+                        f"SHA-256 mismatch: got {result['sha256'][:16]}…, "
+                        f"expected {result.get('expected', '')[:16]}…"
+                    )
+                raise typer.Exit(1)
+            typer.echo(f"verified  {dest}  ({result['bytes'] / 2**30:.1f} GiB)")
+            typer.echo(f"add to config: hearth models  (or edit {s.paths.gateway_config})")
+
+    asyncio.run(run())
