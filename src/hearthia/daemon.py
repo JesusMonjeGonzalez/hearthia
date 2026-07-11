@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from hearthia.api import chat, config, logs, models
+from hearthia.api import brain, chat, config, logs, models
 from hearthia.gateway import Gateway
 from hearthia.lifecycle import LifecycleEngine
 from hearthia.registry import Registry
@@ -64,6 +64,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(config.router)
     app.include_router(chat.router)
     app.include_router(logs.router)
+    app.include_router(brain.router)
 
     web_dir = Path(__file__).parent / "web"
     app.mount("/static", StaticFiles(directory=web_dir), name="static")

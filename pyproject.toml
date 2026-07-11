@@ -9,6 +9,7 @@ dependencies = [
     "psutil>=7",
     "pydantic-settings>=2.6",
     "ruamel.yaml>=0.18",
+    "sqlite-vec>=0.1.9",
     "typer>=0.15",
     "uvicorn[standard]>=0.34",
 ]

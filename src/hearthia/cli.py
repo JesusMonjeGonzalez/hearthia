@@ -387,3 +387,132 @@ def pull(
             typer.echo(f"add to config: hearth models  (or edit {s.paths.gateway_config})")
 
     asyncio.run(run())
+
+
+brain_app = typer.Typer(name="brain", help="Second brain: capture, search, reindex.")
+app.add_typer(brain_app, name="brain")
+
+
+@brain_app.command("capture")
+def brain_capture(
+    text: list[str] | None = typer.Argument(None, help="Text to capture."),  # noqa: B008
+) -> None:
+    """Capture a note into the vault, auto-titled/tagged by local AI."""
+    import httpx
+
+    from hearthia.brain.capture import classify, get_text, write_note
+
+    s = Settings()
+    vault = s.brain.vault
+    if vault is None:
+        typer.echo("brain vault not configured — set [brain].vault in config.toml")
+        raise typer.Exit(1)
+
+    raw = " ".join(text) if text else get_text()
+    if not raw.strip():
+        typer.echo("nothing to capture")
+        raise typer.Exit(1)
+
+    async def run() -> None:
+        async with httpx.AsyncClient() as client:
+            meta = await classify(client, raw, s.gateway.url)
+        if meta is None:
+            typer.echo("(model offline — filing raw into 00 Inbox)", err=True)
+        path = write_note(vault, raw, meta)
+        typer.echo(path)
+
+    asyncio.run(run())
+
+
+@brain_app.command("search")
+def brain_search(
+    query: str = typer.Argument(..., help="Search query."),
+    k: int = typer.Option(8, "-k", help="Number of results."),
+) -> None:
+    """Semantic search over the vault."""
+    import httpx
+
+    from hearthia.brain.indexer import BrainIndex
+    from hearthia.brain.search import search as brain_search_fn
+
+    s = Settings()
+    vault = s.brain.vault
+    if vault is None:
+        typer.echo("brain vault not configured — set [brain].vault in config.toml")
+        raise typer.Exit(1)
+
+    db_path = s.paths.stack_dir / "brain-index.db"
+
+    async def run() -> None:
+        index = BrainIndex(db_path, vault)
+        try:
+            async with httpx.AsyncClient() as client:
+                result = await brain_search_fn(index, client, query, s.gateway.url, k=k)
+        finally:
+            index.close()
+        for r in result.get("results", []):
+            typer.echo(f"  {r['score']:.3f}  {r['path']}")
+            if r.get("snippet"):
+                typer.echo(f"          {r['snippet'][:120]}…")
+
+    asyncio.run(run())
+
+
+@brain_app.command("reindex")
+def brain_reindex() -> None:
+    """Reindex the vault (embed new/changed notes, drop deleted)."""
+    import httpx
+
+    from hearthia.brain.indexer import BrainIndex
+    from hearthia.brain.search import reindex as brain_reindex_fn
+
+    s = Settings()
+    vault = s.brain.vault
+    if vault is None:
+        typer.echo("brain vault not configured — set [brain].vault in config.toml")
+        raise typer.Exit(1)
+
+    db_path = s.paths.stack_dir / "brain-index.db"
+
+    async def run() -> None:
+        index = BrainIndex(db_path, vault)
+        try:
+            async with httpx.AsyncClient() as client:
+                result = await brain_reindex_fn(index, client, s.gateway.url)
+        finally:
+            index.close()
+        if "error" in result:
+            typer.echo(result["error"])
+            raise typer.Exit(1)
+        typer.echo(
+            f"  indexed {result['indexed']}  removed {result['removed']}  "
+            f"files {result['files']}  chunks {result['chunks']}"
+        )
+
+    asyncio.run(run())
+
+
+@brain_app.command("status")
+def brain_status() -> None:
+    """Show brain index status."""
+    from hearthia.brain.indexer import BrainIndex
+
+    s = Settings()
+    if s.brain.vault is None:
+        typer.echo("brain vault not configured")
+        raise typer.Exit(1)
+
+    db_path = s.paths.stack_dir / "brain-index.db"
+    if not db_path.exists():
+        typer.echo(f"  vault   {s.brain.vault}")
+        typer.echo("  index   not built (run 'hearth brain reindex')")
+        return
+
+    index = BrainIndex(db_path, s.brain.vault)
+    try:
+        stats = index.stats()
+    finally:
+        index.close()
+    typer.echo(f"  vault   {stats['vault']}")
+    typer.echo(f"  files   {stats['files']}")
+    typer.echo(f"  chunks  {stats['chunks']}")

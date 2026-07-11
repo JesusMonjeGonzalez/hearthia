@@ -124,3 +124,11 @@ def test_pull_command_exists():
     result = runner.invoke(app, ["pull", "--help"])
     assert result.exit_code == 0
     assert "pull" in result.output.lower()
+
+
+def test_brain_command_exists():
+    result = runner.invoke(app, ["brain", "--help"])
+    assert result.exit_code == 0
+    assert "capture" in result.output.lower()
+    assert "search" in result.output.lower()
+    assert "reindex" in result.output.lower()
