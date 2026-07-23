@@ -1,14 +1,18 @@
 import hashlib
 
 import httpx
+import pytest
 import respx
 
 from hearthia.library import (
     download_file,
+    estimate_resident_ram,
     fit_check,
+    kv_cache_bytes,
     list_gguf_files,
     model_block_template,
     search_models,
+    set_fits,
 )
 
 HF_API = "https://huggingface.co/api"
@@ -238,3 +242,86 @@ async def test_download_reports_progress(tmp_path):
     assert result["ok"] is True
     assert seen[-1] == 100
     assert seen == sorted(seen)
+
+
+# --- Presupuesto de RAM: KV cache exacto y co-residencia -------------------
+# Parámetros y resultados medidos sobre los GGUF reales el 2026-07-23.
+
+GIB = 1024**3
+
+
+def test_kv_cache_bytes_moe_flagship():
+    """Qwen3.6-35B-A3B: 40 capas, 2 kv_heads, k_len=v_len=256. 32K a q8_0 ~= 1,33 GiB."""
+    got = kv_cache_bytes(
+        n_layer=40, n_kv_heads=2, k_len=256, v_len=256, ctx=32768, cache_type="q8_0"
+    )
+    assert 1.30 * GIB < got < 1.36 * GIB
+
+
+def test_kv_cache_bytes_gemma_is_an_order_of_magnitude_larger():
+    """gemma-4-12B: 48 capas, 8 kv_heads, k_len=v_len=512. 32K a q8_0 ~= 12,75 GiB."""
+    got = kv_cache_bytes(
+        n_layer=48, n_kv_heads=8, k_len=512, v_len=512, ctx=32768, cache_type="q8_0"
+    )
+    assert 12.5 * GIB < got < 13.0 * GIB
+
+
+def test_kv_cache_halves_when_quantised_to_q4():
+    shape = dict(n_layer=64, n_kv_heads=4, k_len=256, v_len=256, ctx=32768)
+    q8 = kv_cache_bytes(**shape, cache_type="q8_0")
+    q4 = kv_cache_bytes(**shape, cache_type="q4_0")
+    assert 0.50 < q4 / q8 < 0.56
+
+
+def test_kv_cache_scales_linearly_with_context():
+    small = kv_cache_bytes(n_layer=32, n_kv_heads=4, k_len=256, v_len=256, ctx=32768)
+    large = kv_cache_bytes(n_layer=32, n_kv_heads=4, k_len=256, v_len=256, ctx=131072)
+    assert large == small * 4
+
+
+def test_kv_cache_rejects_unknown_cache_type():
+    with pytest.raises(ValueError):
+        kv_cache_bytes(n_layer=1, n_kv_heads=1, k_len=1, v_len=1, ctx=1, cache_type="q3_k_xl")
+
+
+def test_file_size_heuristic_underestimates_high_kv_models():
+    """El motivo del cambio: para gemma, file_size*1.3 se queda muy corto."""
+    file_size = int(7.14 * GIB)
+    heuristic = int(file_size * 1.3)
+    real = estimate_resident_ram(
+        file_size=file_size,
+        kv_bytes=kv_cache_bytes(
+            n_layer=48, n_kv_heads=8, k_len=512, v_len=512, ctx=32768, cache_type="q8_0"
+        ),
+    )
+    assert real > heuristic * 2
+
+
+def test_set_fits_accepts_a_lone_flagship():
+    flagship = estimate_resident_ram(
+        file_size=int(20.82 * GIB),
+        kv_bytes=kv_cache_bytes(
+            n_layer=40, n_kv_heads=2, k_len=256, v_len=256, ctx=32768, cache_type="q4_0"
+        ),
+    )
+    assert set_fits([flagship], available_ram=34 * GIB, wired_limit=24 * GIB) is True
+
+
+def test_set_rejects_the_combination_that_froze_the_mac():
+    """35B + embeddings + autocomplete co-residentes: 26,7 GiB medidos contra techo de 24."""
+    flagship = estimate_resident_ram(
+        file_size=int(20.82 * GIB),
+        kv_bytes=kv_cache_bytes(
+            n_layer=40, n_kv_heads=2, k_len=256, v_len=256, ctx=32768, cache_type="q8_0"
+        ),
+    )
+    embeddings = estimate_resident_ram(file_size=int(0.60 * GIB), kv_bytes=int(0.46 * GIB))
+    autocomplete = estimate_resident_ram(file_size=int(1.53 * GIB), kv_bytes=int(0.12 * GIB))
+    assert (
+        set_fits([flagship, embeddings, autocomplete], available_ram=34 * GIB, wired_limit=24 * GIB)
+        is False
+    )
+
+
+def test_set_fits_is_empty_safe():
+    assert set_fits([], available_ram=GIB, wired_limit=GIB) is True

@@ -56,12 +56,82 @@ async def list_gguf_files(client: httpx.AsyncClient, repo: str) -> list[HFFile]:
 
 
 def fit_check(file_size: int, available_ram: int, wired_limit: int) -> bool:
-    """Check if a model file fits in available memory.
+    """Coarse pre-download check, based on file size alone.
 
-    GGUF Q4 quants use ~1.3x the file size in RAM (weights + KV cache + overhead).
+    Only for `hearth pull`, where the context length is not yet known. The 1.3x
+    factor is a rough guess and is wrong in both directions: it overestimates
+    MoE models and badly underestimates architectures with a large KV cache
+    (gemma-4-12B at 32K needs ~2.8x its file size).
+
+    Once a model is about to be loaded, its parameters are known — use
+    `kv_cache_bytes` + `estimate_resident_ram` + `set_fits` instead.
     """
     estimated_ram = int(file_size * 1.3)
     return estimated_ram < wired_limit and estimated_ram < available_ram
+
+
+# Bytes per cached element, including the block scales the quantised
+# formats carry (q8_0 stores 32 values plus one f16 scale, and so on).
+_KV_BYTES_PER_ELEMENT = {
+    "f32": 4.0,
+    "f16": 2.0,
+    "bf16": 2.0,
+    "q8_0": 8.5 / 8,
+    "q5_1": 6.0 / 8,
+    "q5_0": 5.5 / 8,
+    "q4_1": 5.0 / 8,
+    "q4_0": 4.5 / 8,
+}
+
+
+def kv_cache_bytes(
+    n_layer: int,
+    n_kv_heads: int,
+    k_len: int,
+    v_len: int,
+    ctx: int,
+    cache_type: str = "q8_0",
+) -> int:
+    """Exact KV cache size for a model at a given context length.
+
+    The cache scales with layers, KV heads, head dimension and context — never
+    with file size. This is why two models of similar size can differ tenfold:
+    gemma-4-12B costs 408 MB per 1K tokens, Qwen3.6-35B-A3B costs 42.5 MB.
+
+    All parameters come from the GGUF header (`block_count`,
+    `attention.head_count_kv`, `attention.key_length`, `attention.value_length`).
+    """
+    try:
+        bytes_per_element = _KV_BYTES_PER_ELEMENT[cache_type]
+    except KeyError:
+        raise ValueError(
+            f"unknown cache type {cache_type!r}; "
+            f"expected one of {', '.join(sorted(_KV_BYTES_PER_ELEMENT))}"
+        ) from None
+    per_token = n_layer * (k_len + v_len) * n_kv_heads * bytes_per_element
+    return int(per_token * ctx)
+
+
+def estimate_resident_ram(file_size: int, kv_bytes: int, overhead_ratio: float = 0.05) -> int:
+    """RAM a loaded model actually holds: weights + KV cache + compute buffers.
+
+    Weights are memory-mapped but become resident once the GPU wires them, so
+    the file size is the right figure on Apple Silicon.
+    """
+    overhead = max(int(file_size * overhead_ratio), 256 * 1024**2)
+    return file_size + kv_bytes + overhead
+
+
+def set_fits(estimates: list[int], available_ram: int, wired_limit: int) -> bool:
+    """Whether a set of co-resident models fits.
+
+    Checking models one at a time is what lets a machine freeze: on 2026-07-23 a
+    35B, an embeddings model and an autocomplete model each fitted alone, but
+    together reached 26.7 GiB against a 24 GiB ceiling. Wired memory cannot be
+    paged out, so the OS strangles everything else instead of failing.
+    """
+    total = sum(estimates)
+    return total < wired_limit and total < available_ram
 
 
 async def download_file(
