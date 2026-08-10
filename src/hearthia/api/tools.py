@@ -104,21 +104,6 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "write_file",
-            "description": "Create a new file or overwrite an existing one with the given content.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Absolute path to the file to write"},
-                    "content": {"type": "string", "description": "Full content to write"},
-                },
-                "required": ["path", "content"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "search_notes",
             "description": (
                 "Semantic search over the user's personal notes (Obsidian vault). "
@@ -282,14 +267,7 @@ async def execute_tool(tool_call: dict, *, notes_search=None) -> str:
         return _do_search(args)
 
     if name == "write_file":
-        path = _resolve(args["path"])
-        content = args["content"]
-        path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            path.write_text(content, encoding="utf-8")
-            return f"Written {len(content)} bytes to {path}"
-        except OSError as e:
-            return f"Error writing file: {e}"
+        return "Error: write_file is disabled; Hearthia chat is read-only"
 
     if name == "list_dir":
         path = _resolve(args["path"])

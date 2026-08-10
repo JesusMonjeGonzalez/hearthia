@@ -44,10 +44,7 @@ async def read_file(body: ReadRequest):
 
 @router.post("/write")
 async def write_file(body: WriteRequest):
-    path = _resolve(body.path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(body.content, encoding="utf-8")
-    return {"path": str(path), "written": len(body.content)}
+    raise HTTPException(403, "Context writes are disabled")
 
 
 @router.post("/list")

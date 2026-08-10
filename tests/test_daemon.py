@@ -62,6 +62,33 @@ async def test_create_app_serves_static(config_path, backups_dir):
 
 
 @respx.mock
+async def test_context_write_is_disabled(config_path, backups_dir, tmp_path):
+    app = create_app(_settings(config_path))
+    target = tmp_path / "blocked.txt"
+    async with await _client(app) as client:
+        r = await client.post(
+            "/api/context/write",
+            json={"path": str(target), "content": "blocked"},
+        )
+    assert r.status_code == 403
+    assert not target.exists()
+    await app.state.gateway.close()
+
+
+@respx.mock
+async def test_foreign_browser_origin_is_rejected(config_path, backups_dir):
+    app = create_app(_settings(config_path))
+    async with await _client(app) as client:
+        r = await client.post(
+            "/api/context/read",
+            headers={"Origin": "https://attacker.example"},
+            json={"path": str(config_path)},
+        )
+    assert r.status_code == 403
+    await app.state.gateway.close()
+
+
+@respx.mock
 async def test_lifespan_starts_and_cleans_up(config_path, backups_dir):
     respx.get(f"{BASE}/running").respond(200, json={"running": []})
     respx.get(f"{BASE}/api/events").respond(200, text="")

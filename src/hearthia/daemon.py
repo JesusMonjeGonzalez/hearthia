@@ -5,8 +5,8 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from hearthia.api import brain, chat, config, context, library, logs, models
@@ -57,6 +57,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.registry = reg
     app.state.telemetry = tel
     app.state.settings = settings
+
+    allowed_origins = {
+        f"http://{settings.daemon.bind}:{settings.daemon.port}",
+        f"http://127.0.0.1:{settings.daemon.port}",
+        f"http://localhost:{settings.daemon.port}",
+    }
+
+    @app.middleware("http")
+    async def reject_foreign_browser_origins(request: Request, call_next):
+        origin = request.headers.get("origin")
+        if origin is not None and origin not in allowed_origins:
+            return JSONResponse({"detail": "Untrusted browser origin"}, status_code=403)
+        return await call_next(request)
 
     app.include_router(models.router)
     app.include_router(config.router)

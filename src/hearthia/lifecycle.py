@@ -106,11 +106,9 @@ class LifecycleEngine:
             elif kind == "role":
                 role_models = self._models_with_role(target)
                 role_alive = bool(running & role_models)
-                prev = self._prev_role_alive.get(target, False)
-
                 if role_alive and mid not in running:
                     warm_tasks.append(asyncio.create_task(self._spawn(mid)))
-                elif prev and not role_alive and mid in running:
+                elif not role_alive and mid in running:
                     died_at = self._role_died_at.setdefault(mid, time.time())
                     if time.time() - died_at > _ROLE_GRACE_SECONDS:
                         await self._gw.cool(mid)

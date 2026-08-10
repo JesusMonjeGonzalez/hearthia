@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -72,9 +73,7 @@ def render_plists(settings) -> dict[str, str]:
     s = settings
     logs_dir = s.paths.logs_dir
     logs_dir.mkdir(parents=True, exist_ok=True)
-    python_bin = str(Path(__file__).parent.parent.parent / ".venv" / "bin" / "python")
-    if not Path(python_bin).exists():
-        python_bin = "python3"
+    python_bin = sys.executable
 
     gateway = ServiceSpec(
         label=GATEWAY_LABEL,
@@ -112,9 +111,10 @@ def render_plists(settings) -> dict[str, str]:
         program_arguments=[
             "/bin/zsh",
             "-c",
-            'echo "== $(date) ==" && /opt/homebrew/bin/brew upgrade llama.cpp; true',
+            'echo "== $(date) ==" && /opt/homebrew/bin/brew upgrade llama.cpp',
         ],
         calendar_interval={"Weekday": 0, "Hour": 11, "Minute": 0},
+        run_at_load=False,
         keep_alive=False,
         log_path=logs_dir / "update.log",
     )
@@ -136,11 +136,14 @@ def install_plists(settings) -> list[str]:
     for label, xml in plists.items():
         path = launch_agents / f"{label}.plist"
         path.write_text(xml)
-        subprocess.run(
+        result = subprocess.run(
             ["launchctl", "bootstrap", f"gui/{uid}", str(path)],
             capture_output=True,
             text=True,
         )
+        if result.returncode != 0:
+            detail = result.stderr.strip() or f"launchctl exited with {result.returncode}"
+            raise RuntimeError(f"failed to install {label}: {detail}")
         installed.append(label)
     return installed
 

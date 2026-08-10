@@ -6,6 +6,7 @@ from hearthia.service import (
     UPDATE_LABEL,
     ServiceSpec,
     _plist_xml,
+    install_plists,
     render_plists,
     restart_service,
     service_status,
@@ -85,6 +86,29 @@ def test_render_plists_creates_logs_dir(tmp_path):
     settings = Settings(paths=paths)
     render_plists(settings)
     assert logs_dir.exists()
+
+
+def test_install_plists_reports_bootstrap_failure(tmp_path):
+    from hearthia.settings import PathsSettings, Settings
+
+    paths = PathsSettings(
+        stack_dir=tmp_path,
+        models_dir=tmp_path / "models",
+        logs_dir=tmp_path / "logs",
+    )
+    settings = Settings(paths=paths)
+    failed = type("R", (), {"returncode": 5, "stderr": "bootstrap failed"})()
+
+    with (
+        patch("hearthia.service.Path.home", return_value=tmp_path),
+        patch("hearthia.service.subprocess.run", return_value=failed),
+    ):
+        try:
+            install_plists(settings)
+        except RuntimeError as error:
+            assert "bootstrap failed" in str(error)
+        else:
+            raise AssertionError("bootstrap failure was silently ignored")
 
 
 def test_restart_service_success():

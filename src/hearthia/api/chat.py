@@ -18,6 +18,8 @@ from hearthia.api.tools import TOOLS, execute_tool
 
 router = APIRouter(prefix="/api")
 
+_CODE_TOP_K = 3
+
 _MAX_TOOL_ROUNDS = 8
 _DEDUP_NOTE = (
     "(result already provided above — content unchanged; use the earlier copy "
@@ -121,7 +123,7 @@ class _SSECollector:
 def _trunc_path(path: str, max_len: int = 60) -> str:
     if len(path) <= max_len:
         return path
-    return "..." + path[-(max_len - 3):]
+    return "..." + path[-(max_len - 3) :]
 
 
 def _call_label(t: dict) -> str:
@@ -197,6 +199,73 @@ def _notes_searcher(state):
     return searcher
 
 
+async def _inject_code_chunks(
+    messages: list[dict],
+    gateway_url: str,
+    k: int = _CODE_TOP_K,
+) -> tuple[list[dict], list[str]]:
+    """Inject top-k semantically-relevant code chunks into the leading system msg.
+
+    Mirrors ``_inject_context``'s merge into the leading system message
+    (Qwen rejects system messages anywhere but position 0). Only triggers
+    when the last user message mentions a real on-disk directory — never
+    silently injects from CWD.
+    """
+    last_user = next(
+        (m for m in reversed(messages) if m.get("role") == "user"),
+        None,
+    )
+    if last_user is None:
+        return messages, []
+
+    paths = detect_paths(str(last_user.get("content", "")))
+    root: Path | None = None
+    for p in paths:
+        candidate = Path(p)
+        if candidate.is_dir():
+            root = candidate
+            break
+    if root is None:
+        return messages, []
+
+    query = str(last_user.get("content", ""))
+    from hearthia.brain.search import search_code
+
+    try:
+        async with httpx.AsyncClient() as client:
+            chunks = await search_code(root, client, query, gateway_url, k=k)
+    except Exception:
+        return messages, []
+
+    if not chunks:
+        return messages, []
+
+    refs: list[str] = []
+    rendered: list[str] = []
+    for c in chunks:
+        ref = f"{c['path']}:{c['start_line']}-{c['end_line']}"
+        refs.append(ref)
+        rendered.append(c["text"].rstrip())
+
+    block = (
+        "[Fast-path code excerpts pre-loaded — these are the answer.]\n\n"
+        "The most relevant code for the user's question is shown below with "
+        "file:line provenance. Treat these excerpts as if you had already run "
+        "`search` and `read_files` to find them: they ARE the answer. Do not "
+        "call `search`, `list_dir`, `read_files`, or `glob` to re-discover what "
+        "is already shown — that contradicts the system instruction to "
+        "minimise tool rounds. Synthesise a direct answer from the excerpts "
+        "below; only call a tool if the user asks for something these excerpts "
+        "do not cover.\n\n"
+        + "\n\n---\n\n".join(rendered)
+    )
+
+    if messages and messages[0].get("role") == "system":
+        head = {**messages[0], "content": f"{messages[0].get('content', '')}\n\n{block}"}
+        return [head, *messages[1:]], refs
+    return [{"role": "system", "content": block}, *messages], refs
+
+
 @router.post("/chat")
 async def chat(request: Request):
     gw = request.app.state.gateway
@@ -209,6 +278,10 @@ async def chat(request: Request):
 
     messages = _ensure_tool_hint(messages)
     messages, injected_maps = _inject_context(messages)
+    messages, injected_code = await _inject_code_chunks(
+        messages,
+        request.app.state.settings.gateway.url,
+    )
     notes_search = _notes_searcher(request.app.state)
 
     async def stream():
@@ -241,6 +314,12 @@ async def chat(request: Request):
 
             tool_calls = collector.tool_calls
             if final_round or collector.finish_reason != "tool_calls" or not tool_calls:
+                if injected_code:
+                    yield (
+                        b"data: "
+                        + json.dumps({"injected_chunks": injected_code}).encode()
+                        + b"\n\n"
+                    )
                 return  # text answer already streamed through
 
             messages.append(

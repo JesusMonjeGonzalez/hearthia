@@ -15,6 +15,7 @@ def test_tool_schemas_expose_batch_read_and_search():
     names = {t["function"]["name"] for t in TOOLS}
     assert "read_files" in names
     assert "search" in names
+    assert "write_file" not in names
 
 
 async def test_read_files_batch(tmp_path):
@@ -83,11 +84,11 @@ async def test_search_returns_matches_with_line_numbers(tmp_path):
     assert "needle_function" in out
 
 
-async def test_write_file_roundtrip(tmp_path):
+async def test_write_file_is_disabled(tmp_path):
     target = tmp_path / "new" / "file.txt"
     out = await execute_tool(_call("write_file", path=str(target), content="hello"))
-    assert "5" in out
-    assert target.read_text() == "hello"
+    assert "disabled" in out.lower()
+    assert not target.exists()
 
 
 async def test_search_notes_uses_injected_searcher():

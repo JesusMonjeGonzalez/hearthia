@@ -81,6 +81,51 @@ def chunk_markdown(text: str, target: int = 1200) -> list[str]:
     return chunks
 
 
+def chunk_code(path: str, text: str, window: int = 200) -> list[tuple[str, int, int]]:
+    """Split source into chunks with (text, start_line, end_line) provenance.
+
+    For Python (.py/.pyi): split at top-level def/class/async def boundaries.
+    For everything else: fixed ``window``-line windows.
+
+    Every chunk text is prefixed with ``# path:start_line\\n`` so snippets
+    carry their own origin — the agent can quote a chunk and the user can
+    click it back to the right file/line without needing a separate index.
+    """
+    lines = text.splitlines(keepends=True)
+    if not lines:
+        return []
+
+    is_python = path.endswith(".py") or path.endswith(".pyi")
+    if is_python:
+        boundaries = [0]
+        for i, line in enumerate(lines):
+            stripped = line.lstrip()
+            indent = len(line) - len(stripped)
+            if indent != 0:
+                continue
+            if (
+                stripped.startswith("def ")
+                or stripped.startswith("class ")
+                or stripped.startswith("async def ")
+            ):
+                boundaries.append(i)
+        boundaries.append(len(lines))
+        spans = list(zip(boundaries[:-1], boundaries[1:], strict=False))
+    else:
+        spans = [(i, min(i + window, len(lines))) for i in range(0, len(lines), window)]
+
+    chunks: list[tuple[str, int, int]] = []
+    for start, end in spans:
+        if start == end:
+            continue
+        body = "".join(lines[start:end])
+        start_line = start + 1  # 1-indexed
+        end_line = end  # 1-indexed
+        header = f"# {path}:{start_line}\n"
+        chunks.append((header + body, start_line, end_line))
+    return chunks
+
+
 def vault_files(vault: Path) -> list[Path]:
     """List all .md files in the vault, excluding .obsidian and Templates."""
     if not vault.exists():

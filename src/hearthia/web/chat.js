@@ -62,7 +62,7 @@ function renderConv() {
   if (!c || !c.messages.length) {
     log.innerHTML = `<div class="empty">The hearth is quiet. Your first message warms the model into RAM.</div>`;
   } else {
-    for (const m of c.messages) addMsg(m.role, m.content, m.reasoning, m.stats);
+    for (const m of c.messages) addMsg(m.role, m.content, m.reasoning, m.stats, m.injected_chunks);
   }
   if (c) {
     $("#chat-system").value = c.system || "";
@@ -75,7 +75,7 @@ function statsLine(t) {
   return `⚡ ${t.predicted_per_second.toFixed(1)} tok/s · prefill ${Math.round(t.prompt_per_second)} t/s · ${t.predicted_n} tok`;
 }
 
-function addMsg(role, content, reasoning, stats) {
+function addMsg(role, content, reasoning, stats, injectedChunks) {
   const log = $("#chat-log");
   const d = document.createElement("div");
   d.className = "msg " + role;
@@ -92,6 +92,13 @@ function addMsg(role, content, reasoning, stats) {
       sEl.className = "msg-stats";
       sEl.textContent = sl;
       d.appendChild(sEl);
+    }
+    if (injectedChunks && injectedChunks.length) {
+      const bEl = document.createElement("div");
+      bEl.className = "msg-injected";
+      bEl.textContent = `📎 ${injectedChunks.length} chunks injected`;
+      bEl.title = injectedChunks.join("\n");
+      d.appendChild(bEl);
     }
   } else {
     d.textContent = content;
@@ -268,7 +275,8 @@ $("#chat-form").addEventListener("submit", async (e) => {
     tokens = 0,
     tStart = performance.now(),
     tFirst = null,
-    stats = null;
+    stats = null,
+    injectedChunks = [];
   const log = $("#chat-log");
 
   const redraw = () => {
@@ -306,6 +314,10 @@ $("#chat-form").addEventListener("submit", async (e) => {
         try {
           const j = JSON.parse(payload);
           if (j.timings?.predicted_per_second) stats = j.timings;
+          if (j.injected_chunks) {
+            injectedChunks = j.injected_chunks;
+            continue;
+          }
           if (j.error) {
             out += "\n`[error]` " + JSON.stringify(j.error);
             continue;
@@ -343,7 +355,14 @@ $("#chat-form").addEventListener("submit", async (e) => {
         sEl.textContent = sl;
         el.appendChild(sEl);
       }
-      c.messages.push({ role: "assistant", content: out, reasoning, stats });
+      if (injectedChunks.length) {
+        const bEl = document.createElement("div");
+        bEl.className = "msg-injected";
+        bEl.textContent = `📎 ${injectedChunks.length} chunks injected`;
+        bEl.title = injectedChunks.join("\n");
+        el.appendChild(bEl);
+      }
+      c.messages.push({ role: "assistant", content: out, reasoning, stats, injected_chunks: injectedChunks });
     } else {
       el.innerHTML = `<span class="msg-error">no reply — stopped, or the model failed to load (see Logs)</span>`;
     }

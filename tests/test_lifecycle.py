@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import respx
@@ -114,6 +114,37 @@ async def test_tick_cools_embed_when_last_chat_unloaded(config_path, backups_dir
     await engine.tick()
 
     assert cool_route.called
+    await gw.close()
+
+
+async def test_role_grace_expires_on_a_later_tick(config_path, backups_dir):
+    gw = Gateway(BASE)
+    reg = Registry(config_path, backups_dir)
+    tel = Telemetry(gw)
+    engine = LifecycleEngine(gw, reg, tel, {"tiny-embed": "role:chat"})
+    cool = AsyncMock()
+
+    with (
+        patch.object(
+            engine,
+            "_is_running",
+            AsyncMock(
+                side_effect=[
+                    {"big-coder", "tiny-embed"},
+                    {"tiny-embed"},
+                    {"tiny-embed"},
+                ]
+            ),
+        ),
+        patch.object(gw, "cool", cool),
+    ):
+        await engine.tick()
+        await engine.tick()
+        cool.assert_not_awaited()
+        engine._role_died_at["tiny-embed"] -= 301
+        await engine.tick()
+
+    cool.assert_awaited_once_with("tiny-embed")
     await gw.close()
 
 

@@ -9,6 +9,12 @@ after a TTL, and small helper models follow the thing they serve — the
 autocomplete model lives while your editor runs, the embeddings model lives
 while a chat model is warm.
 
+## Status
+
+Hearthia is under active development for Apple Silicon Macs. The CLI, daemon,
+dashboard and model-management core are covered by an automated test suite;
+real model loading still depends on a local llama.cpp/llama-swap installation.
+
 ## What you get
 
 - **Gateway** — [llama-swap](https://github.com/mostlygeek/llama-swap) serving

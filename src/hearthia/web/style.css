@@ -398,3 +398,12 @@ details.reasoning .rbody { color: var(--dim); font-size: 12.5px; white-space: pr
   margin-top: 6px;
   font-variant-numeric: tabular-nums;
 }
+
+.msg-injected {
+  font: 11px var(--mono);
+  color: var(--cool);
+  margin-top: 4px;
+  opacity: 0.7;
+  white-space: pre-wrap;
+  cursor: help;
+}
