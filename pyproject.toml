@@ -2,7 +2,16 @@
 name = "hearthia"
 version = "0.1.0"
 description = "The self-tending fire for local models — a control plane for llama.cpp on Apple Silicon."
+readme = "README.md"
 requires-python = ">=3.12"
+authors = [{ name = "JesusMonjeGonzalez" }]
+keywords = ["apple-silicon", "llama-cpp", "local-ai", "model-management"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: MacOS X",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+]
 dependencies = [
     "fastapi>=0.115",
     "httpx>=0.28",
@@ -16,6 +25,11 @@ dependencies = [
 
 [project.scripts]
 hearth = "hearthia.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/JesusMonjeGonzalez/hearthia"
+Issues = "https://github.com/JesusMonjeGonzalez/hearthia/issues"
+Repository = "https://github.com/JesusMonjeGonzalez/hearthia.git"
 
 [dependency-groups]
 dev = [
