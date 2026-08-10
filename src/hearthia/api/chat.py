@@ -256,8 +256,7 @@ async def _inject_code_chunks(
         "is already shown — that contradicts the system instruction to "
         "minimise tool rounds. Synthesise a direct answer from the excerpts "
         "below; only call a tool if the user asks for something these excerpts "
-        "do not cover.\n\n"
-        + "\n\n---\n\n".join(rendered)
+        "do not cover.\n\n" + "\n\n---\n\n".join(rendered)
     )
 
     if messages and messages[0].get("role") == "system":

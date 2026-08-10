@@ -57,11 +57,13 @@ async def list_dir(body: ListRequest):
     entries = []
     for entry in sorted(path.iterdir()):
         try:
-            entries.append({
-                "name": entry.name,
-                "is_dir": entry.is_dir(),
-                "size": entry.stat().st_size if entry.is_file() else 0,
-            })
+            entries.append(
+                {
+                    "name": entry.name,
+                    "is_dir": entry.is_dir(),
+                    "size": entry.stat().st_size if entry.is_file() else 0,
+                }
+            )
         except OSError:
             pass
     return {"path": str(path), "entries": entries}

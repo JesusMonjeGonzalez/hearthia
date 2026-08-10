@@ -119,7 +119,10 @@ async def _get_or_build_code_index(
         vecs: list[list[float]] = []
         for i in range(0, len(flat), batch_size):
             vecs += await embed_texts(
-                client, flat[i : i + batch_size], gateway_url, model=embed_model,
+                client,
+                flat[i : i + batch_size],
+                gateway_url,
+                model=embed_model,
             )
         offset = 0
         for rel, mtime, texts in pending:

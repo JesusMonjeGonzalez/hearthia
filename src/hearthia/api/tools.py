@@ -13,10 +13,28 @@ from pathlib import Path
 
 # Directories that are never worth exploring from chat.
 JUNK_DIRS = {
-    ".git", ".hg", ".svn", ".venv", "venv", "node_modules", "__pycache__",
-    ".mypy_cache", ".ruff_cache", ".pytest_cache", ".cache", ".tox",
-    "dist", "build", ".next", ".nuxt", "target", ".gradle", "Pods",
-    "DerivedData", ".Trash", "Library",
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".pytest_cache",
+    ".cache",
+    ".tox",
+    "dist",
+    "build",
+    ".next",
+    ".nuxt",
+    "target",
+    ".gradle",
+    "Pods",
+    "DerivedData",
+    ".Trash",
+    "Library",
 }
 
 _FILE_CHAR_BUDGET = 12_000  # per file
@@ -79,9 +97,7 @@ TOOLS = [
             ),
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Directory path to list"}
-                },
+                "properties": {"path": {"type": "string", "description": "Directory path to list"}},
                 "required": ["path"],
             },
         },
@@ -144,9 +160,7 @@ def _walk(root: Path, max_depth: int = 3, max_files: int = 4000):
     seen = 0
     for dirpath, dirnames, filenames in os.walk(root):
         rel_depth = len(Path(dirpath).relative_to(root).parts)
-        dirnames[:] = sorted(
-            d for d in dirnames if d not in JUNK_DIRS and not d.startswith(".")
-        )
+        dirnames[:] = sorted(d for d in dirnames if d not in JUNK_DIRS and not d.startswith("."))
         if rel_depth >= max_depth:
             dirnames[:] = []
         for fn in sorted(filenames):
@@ -173,9 +187,7 @@ def _closest_matches(missing: Path, n: int = 3) -> list[Path]:
 def _read_one(path: Path, budget: int) -> str:
     if path.exists() and path.is_file():
         try:
-            content = _truncate(
-                path.read_text(encoding="utf-8", errors="replace"), budget
-            )
+            content = _truncate(path.read_text(encoding="utf-8", errors="replace"), budget)
         except OSError as e:
             return f"Error reading {path}: {e}"
         lang = path.suffix.lstrip(".")
