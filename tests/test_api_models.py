@@ -240,6 +240,17 @@ async def test_add_model_endpoint_missing_file_404(config_path, backups_dir):
     await app.state.gateway.close()
 
 
+async def test_add_model_endpoint_rejects_absolute_file_path(config_path, backups_dir):
+    app = _app(config_path, backups_dir)
+    async with await _client(app) as client:
+        r = await client.post(
+            "/api/models/add",
+            json={"id": "outside", "file": "/tmp/private.gguf"},
+        )
+    assert r.status_code == 400
+    await app.state.gateway.close()
+
+
 @respx.mock
 async def test_status_exposes_health(config_path, backups_dir):
     respx.get(f"{BASE}/health").respond(200)

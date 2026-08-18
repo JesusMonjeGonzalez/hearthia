@@ -194,3 +194,6 @@ uvx --from playwright python tests/e2e/smoke.py
 
 See [`CHANGELOG.md`](CHANGELOG.md) for implemented milestones and
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for remaining work.
+
+See the [security policy](SECURITY.md) and [third-party notices](THIRD_PARTY_NOTICES.md).
+Hearthia is released under the [MIT License](LICENSE).

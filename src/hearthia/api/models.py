@@ -141,8 +141,11 @@ async def add_model(request: Request):
     if not model_id or not fname:
         raise HTTPException(400, "id and file are required")
 
-    gguf = Path(fname) if "/" in fname else s.paths.models_dir / fname
-    if ".." in gguf.parts:
+    if Path(fname).name != fname or not fname.endswith(".gguf"):
+        raise HTTPException(400, "bad file path")
+    models_dir = s.paths.models_dir.resolve()
+    gguf = (models_dir / fname).resolve()
+    if gguf.parent != models_dir:
         raise HTTPException(400, "bad file path")
     if not gguf.exists():
         raise HTTPException(404, f"weights file not found: {gguf}")
