@@ -1,6 +1,7 @@
 """Typed configuration: TOML file + HEARTHIA_* environment overrides."""
 
 import os
+from ipaddress import ip_address
 from pathlib import Path
 
 from pydantic import BaseModel, model_validator
@@ -49,6 +50,16 @@ class GatewaySettings(BaseModel):
 class DaemonSettings(BaseModel):
     port: int = 9300
     bind: str = "127.0.0.1"
+
+    @model_validator(mode="after")
+    def _require_loopback(self) -> "DaemonSettings":
+        try:
+            address = ip_address(self.bind)
+        except ValueError as exc:
+            raise ValueError("daemon.bind must be a loopback IP address") from exc
+        if not address.is_loopback:
+            raise ValueError("daemon.bind must be a loopback IP address")
+        return self
 
 
 class BrainSettings(BaseModel):

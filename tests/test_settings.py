@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from hearthia.settings import Settings
 
 
@@ -40,3 +42,16 @@ def test_env_overrides_toml(monkeypatch, tmp_path):
     monkeypatch.setenv("HEARTHIA_CONFIG", str(cfg))
     monkeypatch.setenv("HEARTHIA_GATEWAY__PORT", "9494")
     assert Settings().gateway.port == 9494
+
+
+@pytest.mark.parametrize("bind", ["0.0.0.0", "192.168.1.20", "::"])
+def test_daemon_rejects_non_loopback_bind(monkeypatch, bind):
+    monkeypatch.setenv("HEARTHIA_DAEMON__BIND", bind)
+    with pytest.raises(ValueError, match="loopback"):
+        Settings()
+
+
+@pytest.mark.parametrize("bind", ["127.0.0.1", "::1"])
+def test_daemon_accepts_loopback_bind(monkeypatch, bind):
+    monkeypatch.setenv("HEARTHIA_DAEMON__BIND", bind)
+    assert Settings().daemon.bind == bind
