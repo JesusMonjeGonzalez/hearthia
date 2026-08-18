@@ -5,6 +5,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 GATEWAY_LABEL = "com.hearthia.gateway"
 DAEMON_LABEL = "com.hearthia.hearthd"
@@ -32,20 +33,21 @@ def _plist_xml(spec: ServiceSpec) -> str:
         '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
         '<plist version="1.0">',
         "<dict>",
-        f"  <key>Label</key><string>{spec.label}</string>",
+        f"  <key>Label</key><string>{escape(spec.label)}</string>",
         "  <key>ProgramArguments</key>",
         "  <array>",
     ]
     for arg in spec.program_arguments:
-        lines.append(f"    <string>{arg}</string>")
+        lines.append(f"    <string>{escape(arg)}</string>")
     lines.append("  </array>")
     if spec.working_directory:
-        lines.append(f"  <key>WorkingDirectory</key><string>{spec.working_directory}</string>")
+        workdir = escape(spec.working_directory)
+        lines.append(f"  <key>WorkingDirectory</key><string>{workdir}</string>")
     if spec.environment:
         lines.append("  <key>EnvironmentVariables</key>")
         lines.append("  <dict>")
         for k, v in spec.environment.items():
-            lines.append(f"    <key>{k}</key><string>{v}</string>")
+            lines.append(f"    <key>{escape(k)}</key><string>{escape(v)}</string>")
         lines.append("  </dict>")
     if spec.run_at_load:
         lines.append("  <key>RunAtLoad</key><true/>")
@@ -57,12 +59,12 @@ def _plist_xml(spec: ServiceSpec) -> str:
         lines.append("  <dict>")
         for k, v in ci.items():
             tag = "integer" if isinstance(v, int) else "string"
-            lines.append(f"    <key>{k}</key><{tag}>{v}</{tag}>")
+            lines.append(f"    <key>{escape(k)}</key><{tag}>{escape(str(v))}</{tag}>")
         lines.append("  </dict>")
     if spec.log_path:
         p = str(spec.log_path)
-        lines.append(f"  <key>StandardOutPath</key><string>{p}</string>")
-        lines.append(f"  <key>StandardErrorPath</key><string>{p}</string>")
+        lines.append(f"  <key>StandardOutPath</key><string>{escape(p)}</string>")
+        lines.append(f"  <key>StandardErrorPath</key><string>{escape(p)}</string>")
     lines.append("</dict>")
     lines.append("</plist>")
     return "\n".join(lines) + "\n"
@@ -84,7 +86,7 @@ def render_plists(settings) -> dict[str, str]:
             "--listen",
             f"127.0.0.1:{s.gateway.port}",
         ],
-        environment={"PATH": "/opt/homebrew/bin:/usr/bin:/bin"},
+        environment={"PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"},
         log_path=logs_dir / "llama-swap.log",
     )
 
@@ -97,7 +99,7 @@ def render_plists(settings) -> dict[str, str]:
             "daemon",
         ],
         environment={
-            "PATH": "/opt/homebrew/bin:/usr/bin:/bin",
+            "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
             "HEARTHIA_CONFIG": os.environ.get(
                 "HEARTHIA_CONFIG",
                 str(Path.home() / ".config" / "hearthia" / "config.toml"),

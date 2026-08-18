@@ -161,8 +161,12 @@ async def start_download(request: Request):
     async with httpx.AsyncClient(timeout=30.0) as client:
         files = await list_gguf_files(client, repo)
     match = next((f for f in files if f.path == path), None)
-    total = match.size if match else 0
-    sha256 = match.sha256 if match else None
+    if match is None:
+        raise HTTPException(404, "file is not a GGUF published by that repository")
+    if not match.sha256:
+        raise HTTPException(502, "Hugging Face did not provide a verifiable SHA-256")
+    total = match.size
+    sha256 = match.sha256
 
     mgr = _manager(request)
     fname = mgr.start(repo, path, total, sha256)

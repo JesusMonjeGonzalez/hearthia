@@ -21,7 +21,7 @@ def wired_limit_bytes(total: int) -> int:
     """GPU-wired memory ceiling: sysctl override, else macOS default (~75%)."""
     try:
         out = subprocess.run(
-            ["sysctl", "-n", "iogpu.wired_limit_mb"], capture_output=True, text=True
+            ["/usr/sbin/sysctl", "-n", "iogpu.wired_limit_mb"], capture_output=True, text=True
         ).stdout.strip()
         mb = int(out)
         if mb > 0:

@@ -36,7 +36,7 @@ Hearthia adds the missing operational layer around
 |---|---|
 | Models consume RAM when nobody needs them | Cold models warm on request and cool after a TTL |
 | Helper models outlive the work they support | Role followers track the lifecycle of chat models and clients |
-| Downloads fail halfway through | Resumable downloads, SHA-256 verification and atomic finalization |
+| Downloads fail halfway through | Resumable downloads, required SHA-256 verification and atomic finalization |
 | Local stacks are hard to diagnose | One CLI and dashboard for health, RAM, logs, config and model state |
 | Notes are disconnected from local models | Optional sqlite-vec search and resilient inbox capture for Obsidian |
 
@@ -47,7 +47,7 @@ Hearthia adds the missing operational layer around
 - **Lifecycle daemon:** observes gateway events, followers and crash loops.
 - **Round-trip configuration:** edits `llama-swap.yaml` without destroying comments and rotates backups.
 - **Local Brain:** indexes an optional Obsidian vault with sqlite-vec and local embeddings.
-- **Loopback-first services:** the dashboard binds to `127.0.0.1` and rejects foreign browser origins.
+- **Loopback-only services:** the daemon rejects non-loopback binds and rejects foreign browser origins.
 
 ## Architecture
 
@@ -160,7 +160,7 @@ overridden with variables such as `HEARTHIA_DAEMON__PORT`.
 ## Security Boundary
 
 - Hearthia is a **single-user local tool**, not a multi-user server.
-- Services bind to loopback by default and do not implement user authentication.
+- Services are enforced to loopback and do not implement user authentication; remote binding is rejected.
 - Chat filesystem tools can read/search paths available to the local process; write operations are disabled.
 - Model-fit estimates are advisory. Verify real memory pressure before increasing context or co-residency.
 - Model behavior and compatibility depend on the installed llama.cpp/llama-swap versions.
@@ -187,7 +187,7 @@ uvx --from playwright python tests/e2e/smoke.py
 ## Current Limits
 
 - macOS, Apple Silicon and launchd only.
-- No authentication or remote multi-user deployment model.
+- No authentication or remote multi-user deployment model; this is intentionally a local single-user tool.
 - Real model loading is not exercised by unit CI.
 - The detailed RAM estimator is not yet enforced on every warm request.
 - No signed binary release; installation currently uses Python tooling and Homebrew.

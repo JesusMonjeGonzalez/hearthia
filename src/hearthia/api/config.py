@@ -3,11 +3,29 @@
 import os
 import shutil
 import subprocess
+import tempfile
 
 from fastapi import APIRouter, HTTPException, Request
 from ruamel.yaml import YAML
 
 router = APIRouter(prefix="/api")
+
+
+def _write_atomically(path, text: str) -> None:
+    """Replace a config only after the complete new file is on disk."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
 
 
 @router.get("/config")
@@ -34,7 +52,7 @@ async def put_config(request: Request):
     backup = config_path.with_suffix(".yaml.bak")
     if config_path.exists():
         shutil.copy2(config_path, backup)
-    config_path.write_text(text)
+    _write_atomically(config_path, text)
     return {"ok": True, "backup": str(backup)}
 
 

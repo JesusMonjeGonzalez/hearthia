@@ -42,6 +42,15 @@ def test_plist_xml_with_calendar_interval():
     assert "<key>KeepAlive</key><true/>" not in xml
 
 
+def test_plist_xml_escapes_shell_operators():
+    spec = ServiceSpec(
+        label="com.hearthia.update",
+        program_arguments=["/bin/zsh", "-c", "first && second"],
+    )
+    xml = _plist_xml(spec)
+    assert "first &amp;&amp; second" in xml
+
+
 def test_plist_xml_with_env_and_working_dir():
     spec = ServiceSpec(
         label="com.hearthia.test",

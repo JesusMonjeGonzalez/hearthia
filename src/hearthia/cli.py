@@ -3,6 +3,7 @@
 import asyncio
 from pathlib import Path
 
+import httpx
 import psutil
 import typer
 
@@ -296,7 +297,7 @@ def doctor() -> None:
 
     try:
         out = subprocess.run(
-            ["sysctl", "-n", "iogpu.wired_limit_mb"],
+            ["/usr/sbin/sysctl", "-n", "iogpu.wired_limit_mb"],
             capture_output=True,
             text=True,
         ).stdout.strip()
@@ -315,8 +316,18 @@ def doctor() -> None:
     else:
         typer.echo(f"  [WARN]  models dir   {models_dir} does not exist")
 
-    typer.echo(f"  [INFO]  gateway url  {s.gateway.url}")
-    typer.echo(f"  [INFO]  daemon url   http://{s.daemon.bind}:{s.daemon.port}")
+    services = {
+        "gateway": f"{s.gateway.url}/health",
+        "daemon": f"http://{s.daemon.bind}:{s.daemon.port}/api/status",
+    }
+    for name, url in services.items():
+        try:
+            response = httpx.get(url, timeout=2)
+            response.raise_for_status()
+            typer.echo(f"  [OK]    {name:<12} {url}")
+        except httpx.HTTPError:
+            typer.echo(f"  [FAIL]  {name:<12} unavailable at {url}")
+            ok = False
 
     if ok:
         typer.echo("hearth is healthy.")
@@ -395,6 +406,9 @@ def pull(
                 raise typer.Exit(2)
 
             target = files[0]
+            if not target.sha256:
+                typer.echo("selected Hugging Face file has no verifiable SHA-256")
+                raise typer.Exit(1)
             vm = psutil.virtual_memory()
             wired = wired_limit_bytes(vm.total)
             if not fit_check(target.size, vm.available, wired):

@@ -120,7 +120,14 @@ async def test_hf_files(config_path, backups_dir):
 @respx.mock
 async def test_download_lifecycle(config_path, backups_dir):
     respx.get(f"{HF}/api/models/unsloth/Qwen-GGUF/tree/main").respond(
-        200, json=[{"path": "q4.gguf", "size": 4, "lfs": None}]
+        200,
+        json=[
+            {
+                "path": "q4.gguf",
+                "size": 4,
+                "lfs": {"oid": "3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7"},
+            }
+        ],
     )
     respx.get(f"{HF}/unsloth/Qwen-GGUF/resolve/main/q4.gguf").respond(200, content=b"data")
     app = _app(config_path, backups_dir)
@@ -142,7 +149,39 @@ async def test_download_lifecycle(config_path, backups_dir):
     await app.state.gateway.close()
 
 
+@respx.mock
+async def test_download_rejects_unlisted_file(config_path, backups_dir):
+    respx.get(f"{HF}/api/models/unsloth/Qwen-GGUF/tree/main").respond(
+        200, json=[{"path": "q4.gguf", "size": 4, "lfs": {"oid": "abc"}}]
+    )
+    app = _app(config_path, backups_dir)
+    async with await _client(app) as client:
+        r = await client.post(
+            "/api/downloads", json={"repo": "unsloth/Qwen-GGUF", "path": "other.gguf"}
+        )
+    assert r.status_code == 404
+    await app.state.gateway.close()
+
+
+@respx.mock
+async def test_download_rejects_missing_hash(config_path, backups_dir):
+    respx.get(f"{HF}/api/models/unsloth/Qwen-GGUF/tree/main").respond(
+        200, json=[{"path": "q4.gguf", "size": 4, "lfs": None}]
+    )
+    app = _app(config_path, backups_dir)
+    async with await _client(app) as client:
+        r = await client.post(
+            "/api/downloads", json={"repo": "unsloth/Qwen-GGUF", "path": "q4.gguf"}
+        )
+    assert r.status_code == 502
+    await app.state.gateway.close()
+
+
+@respx.mock
 async def test_download_conflict_409(config_path, backups_dir):
+    respx.get(f"{HF}/api/models/r/tree/main").respond(
+        200, json=[{"path": "q4.gguf", "size": 1, "lfs": {"oid": "abc"}}]
+    )
     app = _app(config_path, backups_dir)
     mgr = _manager_from_app(app)
     mgr.jobs["q4.gguf"] = {
