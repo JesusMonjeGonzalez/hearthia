@@ -10,4 +10,4 @@ Still open before a distributable release:
 - real llama.cpp/llama-swap model loading and restart evidence;
 - memory-pressure and download recovery tests;
 - browser smoke and accessibility checks;
-- signed packaging and an explicit repository license.
+- signed packaging and a third-party dependency/vendor inventory.
