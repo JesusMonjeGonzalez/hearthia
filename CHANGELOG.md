@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.2 — 2026-08-27
+
+### Added
+- New brand mark: hearth arch + self-tending flame, in SVG and PNG
+  (social preview) renditions; matching favicon and dashboard masthead.
+- Qwen3.8-27B headlines the demo and the README examples with real
+  measured numbers from a 36 GB Mac.
+
 ## 0.2.1 — 2026-08-27
 
 ### Added

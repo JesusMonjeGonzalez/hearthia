@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/hearthia-mark.svg" width="104" alt="Hearthia ember mark">
+  <img src="docs/assets/hearthia-mark.svg" width="128" alt="Hearthia — the hearth and the self-tending fire">
 </p>
 
 <h1 align="center">Hearthia</h1>
