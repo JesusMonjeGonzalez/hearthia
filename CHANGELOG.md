@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Dashboard memory map: kindling models render with their GGUF-header
+  resident estimate instead of a placeholder segment — the map is truthful
+  during load, not only after.
+- Brain reindex and code-index build embed in concurrent batches
+  (3 in flight, `embed_batches`), keeping the GPU fed on large vaults.
+
 ## 0.2.0 — 2026-08-27
 
 The memory-protection release: the RAM budget is now enforced, not advisory —

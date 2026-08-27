@@ -1,5 +1,6 @@
 """Brain search: semantic search over the vault using local embeddings."""
 
+import asyncio
 from pathlib import Path
 
 import httpx
@@ -116,14 +117,13 @@ async def _get_or_build_code_index(
         flat.extend(c[0] for c in chunks)
 
     if flat:
-        vecs: list[list[float]] = []
-        for i in range(0, len(flat), batch_size):
-            vecs += await embed_texts(
-                client,
-                flat[i : i + batch_size],
-                gateway_url,
-                model=embed_model,
-            )
+        vecs = await embed_batches(
+            client,
+            flat,
+            gateway_url,
+            model=embed_model,
+            batch_size=batch_size,
+        )
         offset = 0
         for rel, mtime, texts in pending:
             n = len(texts)
@@ -150,6 +150,33 @@ async def embed_texts(
     return [d["embedding"] for d in r.json()["data"]]
 
 
+async def embed_batches(
+    client: httpx.AsyncClient,
+    texts: list[str],
+    gateway_url: str,
+    model: str = "qwen3-embedding-0.6b",
+    batch_size: int = 16,
+    concurrency: int = 3,
+) -> list[list[float]]:
+    """Embed many texts with `concurrency` batch requests in flight.
+
+    llama.cpp batches embeddings well; a little in-flight overlap keeps the
+    GPU fed during big reindexes instead of paying a round trip per batch.
+    Results keep the order of `texts`.
+    """
+    batches = [texts[i : i + batch_size] for i in range(0, len(texts), batch_size)]
+    if not batches:
+        return []
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def run(batch: list[str]) -> list[list[float]]:
+        async with semaphore:
+            return await embed_texts(client, batch, gateway_url, model=model)
+
+    ordered = await asyncio.gather(*(run(b) for b in batches))
+    return [vec for batch in ordered for vec in batch]
+
+
 async def reindex(
     index: BrainIndex,
     client: httpx.AsyncClient,
@@ -165,6 +192,7 @@ async def reindex(
     seen: set[str] = set()
     added = 0
     removed = 0
+    pending: list[tuple[str, float, list[str]]] = []
 
     for f in vault_files(vault):
         rel = str(f.relative_to(vault))
@@ -176,11 +204,17 @@ async def reindex(
         chunks = chunk_markdown(f"# {f.stem}\n{text}")
         if not chunks:
             continue
-        vecs: list[list[float]] = []
-        for i in range(0, len(chunks), batch_size):
-            vecs += await embed_texts(client, chunks[i : i + batch_size], gateway_url)
-        index.insert_chunks(rel, mtime, chunks, vecs)
-        added += 1
+        pending.append((rel, mtime, chunks))
+
+    if pending:
+        flat = [chunk for _, _, chunks in pending for chunk in chunks]
+        vecs = await embed_batches(client, flat, gateway_url, batch_size=batch_size)
+        offset = 0
+        for rel, mtime, chunks in pending:
+            n = len(chunks)
+            index.insert_chunks(rel, mtime, chunks, vecs[offset : offset + n])
+            offset += n
+            added += 1
 
     for gone in set(known) - seen:
         index.remove_file(gone)

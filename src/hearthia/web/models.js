@@ -32,6 +32,7 @@ export async function refreshStatus() {
     const models = s.running.filter((m) => m.rss);
     const modelBytes = models.reduce((a, m) => a + m.rss, 0);
     const otherUsed = Math.max(0, sys.ram_used - modelBytes);
+    const estFor = (id) => (modelsCache.find((x) => x.id === id) || {}).est_resident;
 
     $("#v-models").textContent = s.running.length
       ? s.running.map((m) => m.model).join(", ")
@@ -66,12 +67,13 @@ export async function refreshStatus() {
     };
     for (const m of s.running) {
       const starting = m.state && m.state !== "ready";
-      seg(
-        "model" + (starting ? " starting" : ""),
-        m.rss || 0.02 * sys.ram_total,
-        `${m.model} · ${m.rss ? fmtGB(m.rss) : "kindling…"}`,
-        `${m.model} — ${stateLabel(m.state)}`,
-      );
+      const est = estFor(m.model);
+      const bytes = m.rss || est || 0.02 * sys.ram_total;
+      const label = m.rss
+        ? `${m.model} · ${fmtGB(m.rss)}`
+        : `${m.model} · ${starting ? "kindling…" : ""}est. ${fmtGB(bytes)}`;
+      const title = `${m.model} — ${stateLabel(m.state)}${m.rss ? "" : ` (est. resident ${fmtGB(bytes)})`}`;
+      seg("model" + (starting ? " starting" : ""), bytes, label, title);
     }
     seg(
       "system",
