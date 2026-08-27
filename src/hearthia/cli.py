@@ -145,7 +145,21 @@ def status() -> None:
     async def run() -> tuple[bool, list[dict]]:
         gw = Gateway(s.gateway.url)
         try:
-            return await gw.is_up(), await gw.running()
+            if not await gw.is_up():
+                return False, []
+            running = await gw.running()
+            try:
+                import httpx as _httpx
+
+                r = _httpx.get(f"http://{s.daemon.bind}:{s.daemon.port}/api/status", timeout=1.5)
+                measured = {m.get("model"): m for m in r.json().get("running", [])}
+                for m in running:
+                    extra = measured.get(m.get("model"), {})
+                    m["rss"] = extra.get("rss") or m.get("rss")
+                    m["tok_s"] = extra.get("tok_s") or m.get("tok_s")
+            except (_httpx.HTTPError, ValueError):
+                pass  # daemon down: /running alone still answers
+            return True, running
         finally:
             await gw.close()
 
