@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 — 2026-08-27
 
 ### Added
 - **`hearth est`**: what-if loadout planning — computes each model's
