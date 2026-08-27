@@ -60,7 +60,7 @@ async def capture() -> None:
         await snap(page, "idle", 1.0)
 
         # warm the flagship and the notes model: the memory map comes alive
-        await page.evaluate("fetch('/api/models/qwen-coder-30b/load', {method:'POST'})")
+        await page.evaluate("fetch('/api/models/qwen3.8-27b/load', {method:'POST'})")
         await page.wait_for_timeout(2600)
         await page.evaluate("fetch('/api/models/gemma-notes-12b/load', {method:'POST'})")
         await page.wait_for_timeout(2600)

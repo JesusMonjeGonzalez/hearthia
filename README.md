@@ -8,7 +8,8 @@
 
 <p align="center">
   A Mac-native control plane that turns llama.cpp models into an on-demand local service:<br>
-  load on first use, unload when idle, and <strong>never exceed the unified-memory budget</strong>.
+  load on first use, unload when idle, and <strong>never exceed the unified-memory budget</strong>.<br>
+  Built around the models people actually run — Qwen3.8-27B, Gemma, embeddings helpers — on one Apple Silicon Mac.
 </p>
 
 <p align="center">
@@ -202,19 +203,19 @@ hearth logs -f
 hearth doctor
 ```
 
-Planning a loadout before committing RAM:
+Planning a loadout before committing RAM (Qwen3.8-27B, the local-class
+flagship, plus an embeddings model — on a 36 GB Mac):
 
 ```text
-$ hearth est qwen3.6-35b-a3b bonsai-ternary-27b qwen3-embedding-0.6b
-  qwen3.6-35b-a3b                    22.6 GiB  weights 20.8 + KV 0.7 GiB @ 32,768 tok ctx
-  bonsai-ternary-27b                  9.1 GiB  weights 6.7 + KV 2.1 GiB @ 16,384 tok ctx
+$ hearth est qwen3.8-27b qwen3-embedding-0.6b
+  qwen3.8-27b                        21.7 GiB  weights 16.4 + KV 4.6 GiB @ 65,536 tok ctx
   qwen3-embedding-0.6b                1.1 GiB  weights 0.6 + KV 0.2 GiB @ 4,096 tok ctx
-  total                              32.8 GiB  of 28.0 GiB wired / 26.3 GiB available
-  ✘ DOES NOT FIT
+  total                              22.8 GiB  of 28.0 GiB wired / 26.3 GiB available
+  ✔ FITS
 ```
 
-Lower a context (`hearth est ... --ctx 8192`) and the verdict changes before
-you touch memory.
+Lower a context (`hearth est ... --ctx 8192`) or add a third model and the
+verdict changes before you touch memory.
 
 ## Bring the models you already have
 

@@ -33,14 +33,14 @@ DEMO_PORT = 9301
 # id, name, description, roles, ttl, aliases, gguf bytes, ctx, tok_s, profile
 DEMO_MODELS: list[dict[str, Any]] = [
     {
-        "id": "qwen-coder-30b",
-        "name": "Qwen3.6 Coder 30B",
-        "description": "Flagship coding model. MoE, 3B active parameters.",
+        "id": "qwen3.8-27b",
+        "name": "Qwen3.8 27B",
+        "description": "The flagship. Dense 27B, the model everyone runs locally.",
         "roles": ["chat"],
         "ttl": 600,
         "aliases": ["coder", "default"],
-        "gguf": "qwen3.6-coder-30b-a3b-Q4_K_M.gguf",
-        "gguf_bytes": 18_600_000_000,
+        "gguf": "qwen3.8-27b-Q4_K_M.gguf",
+        "gguf_bytes": 16_400_000_000,
         "ctx": 32768,
         "tok_s": 38.4,
         "profile": {

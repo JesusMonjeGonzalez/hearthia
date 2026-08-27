@@ -26,9 +26,9 @@ async def test_demo_models_listed(tmp_path):
     async with await _client(app) as client:
         r = await client.get("/api/models")
     models = {m["id"]: m for m in r.json()["models"]}
-    assert "qwen-coder-30b" in models
+    assert "qwen3.8-27b" in models
     assert "embed-mini" in models
-    assert models["qwen-coder-30b"]["state"] == "stopped"
+    assert models["qwen3.8-27b"]["state"] == "stopped"
     assert models["embed-mini"]["state"] == "ready"
     assert models["embed-mini"]["file_exists"] is True
     await app.state.gateway.close()
@@ -37,14 +37,14 @@ async def test_demo_models_listed(tmp_path):
 async def test_demo_warm_and_cool(tmp_path):
     app = create_demo_app(demo_dir=tmp_path)
     async with await _client(app) as client:
-        r = await client.post("/api/models/qwen-coder-30b/load")
+        r = await client.post("/api/models/qwen3.8-27b/load")
         assert r.status_code == 200
         r = await client.get("/api/models")
-        assert {m["id"]: m["state"] for m in r.json()["models"]}["qwen-coder-30b"] == "ready"
-        r = await client.post("/api/models/qwen-coder-30b/unload")
+        assert {m["id"]: m["state"] for m in r.json()["models"]}["qwen3.8-27b"] == "ready"
+        r = await client.post("/api/models/qwen3.8-27b/unload")
         assert r.status_code == 200
         r = await client.get("/api/models")
-        assert {m["id"]: m["state"] for m in r.json()["models"]}["qwen-coder-30b"] == "stopped"
+        assert {m["id"]: m["state"] for m in r.json()["models"]}["qwen3.8-27b"] == "stopped"
     await app.state.gateway.close()
 
 
@@ -53,7 +53,7 @@ async def test_demo_chat_streams_canned_reply(tmp_path):
     async with await _client(app) as client:
         r = await client.post(
             "/api/chat",
-            json={"model": "qwen-coder-30b", "messages": [{"role": "user", "content": "hi"}]},
+            json={"model": "qwen3.8-27b", "messages": [{"role": "user", "content": "hi"}]},
         )
     assert r.status_code == 200
     text = r.text
@@ -71,7 +71,7 @@ async def test_demo_config_round_trip(tmp_path):
     async with await _client(app) as client:
         r = await client.get("/api/config")
         yaml_text = r.json()["yaml"]
-        assert "qwen-coder-30b" in yaml_text
+        assert "qwen3.8-27b" in yaml_text
         r = await client.put("/api/config", json={"yaml": yaml_text})
         assert r.status_code == 200
 
@@ -82,7 +82,7 @@ async def test_demo_gguf_shells_parse(tmp_path):
 
     app = create_demo_app(demo_dir=tmp_path)
     await app.state.gateway.close()
-    profile = model_ram_profile(tmp_path / "models" / "qwen3.6-coder-30b-a3b-Q4_K_M.gguf")
+    profile = model_ram_profile(tmp_path / "models" / "qwen3.8-27b-Q4_K_M.gguf")
     assert profile is not None
-    assert profile.n_layer == 48
+    assert profile.n_layer == 48  # dense 27B profile
     assert profile.n_kv_heads == 4

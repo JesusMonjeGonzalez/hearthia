@@ -453,9 +453,7 @@ def adopt_ollama(
 
 @app.command()
 def est(
-    model_ids: Annotated[
-        list[str], typer.Argument(help="Model ids from the config.")
-    ],
+    model_ids: Annotated[list[str], typer.Argument(help="Model ids from the config.")],
     ctx: Annotated[
         int, typer.Option("--ctx", help="Override the context size for every model.")
     ] = 0,

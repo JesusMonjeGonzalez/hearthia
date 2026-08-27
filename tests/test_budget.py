@@ -120,9 +120,7 @@ def test_model_estimate_dataclass_shapes():
 def test_plan_set_fits_and_order(tmp_path, monkeypatch):
     from hearthia.budget import plan_set
 
-    monkeypatch.setattr(
-        "hearthia.budget.wired_limit_bytes", lambda total: int(total * 0.75)
-    )
+    monkeypatch.setattr("hearthia.budget.wired_limit_bytes", lambda total: int(total * 0.75))
     f = tmp_path / "a.gguf"
     with open(f, "wb") as fh:
         fh.truncate(2 * GIB)
@@ -140,9 +138,7 @@ def test_plan_set_fits_and_order(tmp_path, monkeypatch):
 def test_plan_set_does_not_fit(tmp_path, monkeypatch):
     from hearthia.budget import plan_set
 
-    monkeypatch.setattr(
-        "hearthia.budget.wired_limit_bytes", lambda total: int(total * 0.75)
-    )
+    monkeypatch.setattr("hearthia.budget.wired_limit_bytes", lambda total: int(total * 0.75))
     f = tmp_path / "huge.gguf"
     with open(f, "wb") as fh:
         fh.truncate(30 * GIB)
@@ -154,9 +150,7 @@ def test_plan_set_does_not_fit(tmp_path, monkeypatch):
 def test_plan_set_unknown_model(tmp_path, monkeypatch):
     from hearthia.budget import plan_set
 
-    monkeypatch.setattr(
-        "hearthia.budget.wired_limit_bytes", lambda total: int(total * 0.75)
-    )
+    monkeypatch.setattr("hearthia.budget.wired_limit_bytes", lambda total: int(total * 0.75))
     plan = plan_set([], ["ghost"], 36 * GIB, 24 * GIB)
     assert plan["models"][0]["error"] == "not in config"
     assert plan["total_bytes"] == 0
