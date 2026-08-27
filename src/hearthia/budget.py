@@ -174,8 +174,8 @@ def plan_warm(
         f"{total / 2**30:.1f} GiB needed, {max(wired, ram_available) / 2**30:.1f} GiB ceiling. "
         "Cool another model (hearth cool), lower --ctx-size, or use --force."
     )
-    log.warning("warm blocked: %s", reason)
     if mode == "enforce":
+        log.warning("warm blocked: %s", reason)
         return WarmDecision(
             candidate_id,
             False,

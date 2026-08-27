@@ -19,9 +19,9 @@
   <img src="https://img.shields.io/badge/status-active%20development-E8A33D" alt="Active development">
 </p>
 
-![Hearthia dashboard showing model lifecycle and unified memory](docs/assets/hearthia-dashboard.png)
+![Hearthia demo: the memory map comes alive as models warm](docs/assets/hearthia-demo.gif)
 
-<p align="center"><sub>Real dashboard UI with a synthetic demo state. No local configuration or model inventory is shown.</sub></p>
+<p align="center"><sub>The demo dashboard in motion: models warm, the unified-memory map fills, the chat streams. Regenerate it with <code>scripts/capture_demo.py</code>.</sub></p>
 
 ## See it in 30 seconds
 

@@ -340,7 +340,7 @@ def demo_settings(demo_dir: Path) -> Settings:
     )
 
 
-def create_demo_app(demo_dir: Path | None = None) -> FastAPI:
+def create_demo_app(demo_dir: Path | None = None, port: int = DEMO_PORT) -> FastAPI:
     """Assemble the demo daemon: real routers, synthetic state."""
     if demo_dir is None:
         demo_dir = Path.home() / ".hearthia" / "demo"
@@ -364,8 +364,8 @@ def create_demo_app(demo_dir: Path | None = None) -> FastAPI:
     app.state.demo = True
 
     allowed_origins = {
-        f"http://127.0.0.1:{DEMO_PORT}",
-        f"http://localhost:{DEMO_PORT}",
+        f"http://127.0.0.1:{port}",
+        f"http://localhost:{port}",
     }
 
     @app.middleware("http")

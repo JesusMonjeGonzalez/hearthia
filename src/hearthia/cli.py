@@ -273,7 +273,7 @@ def demo(
     url = f"http://127.0.0.1:{port}"
     if not no_open:
         threading.Timer(1.5, lambda: webbrowser.open(url)).start()
-    uvicorn.run(create_demo_app(), host="127.0.0.1", port=port, log_level="warning")
+    uvicorn.run(create_demo_app(port=port), host="127.0.0.1", port=port, log_level="warning")
 
 
 @app.command()
