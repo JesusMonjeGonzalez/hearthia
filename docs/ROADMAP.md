@@ -93,9 +93,9 @@ can't give a TTL to a lifecycle-managed model. Insert the key instead
 - **Brain fallback path**: the non-sqlite-vec cosine fallback is a
   pure-Python loop over every chunk; batch it with numpy (spec §8) or
   drop the fallback and make sqlite-vec a hard dependency (it already is
-  in pyproject) — decide and delete dead code.
-- **Parallel embedding batches** during reindex (spec §8): gather 2–3
-  batch requests concurrently; llama.cpp batches embeddings well.
+   in pyproject) — decide and delete dead code.
+   ~~Parallel embedding batches~~ shipped: `embed_batches` runs 3 requests
+   in flight in both reindex paths.
 - **Playwright smoke script** under `tests/e2e/` (not in pytest): boot the
   daemon against a mock gateway, click through the six tabs, assert no
   console errors. This caught the dead Chat tab — worth keeping runnable.

@@ -198,6 +198,51 @@ def plan_warm(
     )
 
 
+def plan_set(
+    models: list[Model],
+    wanted_ids: list[str],
+    ram_total: int,
+    ram_available: int,
+    extra_ctx: int | None = None,
+) -> dict:
+    """What-if: would this set of models co-resident fit the budget?
+
+    Pure planning — nothing is loaded. Returns per-model estimates, the
+    total, the ceilings and a verdict.
+    """
+    by_id = {m.id: m for m in models}
+    wired = wired_limit_bytes(ram_total)
+    lines: list[dict] = []
+    total = 0
+    unknown = 0
+    for mid in wanted_ids:
+        m = by_id.get(mid)
+        if m is None:
+            lines.append({"id": mid, "error": "not in config"})
+            continue
+        est = estimate_model_ram(m, profile_for(m), ctx=extra_ctx)
+        total += est.resident_bytes
+        if not est.known:
+            unknown += 1
+        lines.append(
+            {
+                "id": mid,
+                "bytes": est.resident_bytes,
+                "known": est.known,
+                "detail": est.detail,
+            }
+        )
+    fits = total < wired and total < ram_available
+    return {
+        "models": lines,
+        "total_bytes": total,
+        "wired_limit": wired,
+        "ram_available": ram_available,
+        "fits": fits,
+        "unknown_estimates": unknown,
+    }
+
+
 def running_resident(running_models: list[dict]) -> dict[str, int | None]:
     """Map {model_id: rss} from a gateway /running payload."""
     return {m.get("model", ""): m.get("rss") for m in running_models if m.get("model")}

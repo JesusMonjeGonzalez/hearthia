@@ -115,3 +115,48 @@ def test_plan_warm_unknown_candidate_is_allowed(tmp_path):
 def test_model_estimate_dataclass_shapes():
     e = ModelEstimate("x", 123, True, "detail")
     assert replace(e, resident_bytes=456).resident_bytes == 456
+
+
+def test_plan_set_fits_and_order(tmp_path, monkeypatch):
+    from hearthia.budget import plan_set
+
+    monkeypatch.setattr(
+        "hearthia.budget.wired_limit_bytes", lambda total: int(total * 0.75)
+    )
+    f = tmp_path / "a.gguf"
+    with open(f, "wb") as fh:
+        fh.truncate(2 * GIB)
+    models = [_model("a", file=f), _model("b", file=None)]
+    plan = plan_set(models, ["a", "b"], 36 * GIB, 24 * GIB)
+    assert plan["fits"] is True
+    # a is a sparse file with no header → file-size guess; b has no file → floor
+    a, b = plan["models"]
+    assert a["bytes"] >= 2 * GIB and a["known"] is False
+    assert b["bytes"] == 512 * 1024**2 and b["known"] is False
+    assert plan["total_bytes"] == a["bytes"] + b["bytes"]
+    assert [m["id"] for m in plan["models"]] == ["a", "b"]
+
+
+def test_plan_set_does_not_fit(tmp_path, monkeypatch):
+    from hearthia.budget import plan_set
+
+    monkeypatch.setattr(
+        "hearthia.budget.wired_limit_bytes", lambda total: int(total * 0.75)
+    )
+    f = tmp_path / "huge.gguf"
+    with open(f, "wb") as fh:
+        fh.truncate(30 * GIB)
+    plan = plan_set([_model("huge", file=f)], ["huge"], 36 * GIB, 24 * GIB)
+    assert plan["fits"] is False
+    assert plan["unknown_estimates"] == 1
+
+
+def test_plan_set_unknown_model(tmp_path, monkeypatch):
+    from hearthia.budget import plan_set
+
+    monkeypatch.setattr(
+        "hearthia.budget.wired_limit_bytes", lambda total: int(total * 0.75)
+    )
+    plan = plan_set([], ["ghost"], 36 * GIB, 24 * GIB)
+    assert plan["models"][0]["error"] == "not in config"
+    assert plan["total_bytes"] == 0

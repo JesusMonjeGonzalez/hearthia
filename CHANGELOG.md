@@ -3,11 +3,17 @@
 ## Unreleased
 
 ### Added
+- **`hearth est`**: what-if loadout planning — computes each model's
+  resident estimate (GGUF-header maths, optional `--ctx` override) and
+  delivers a FITS / DOES NOT FIT verdict against the wired ceiling and
+  available RAM, loading nothing.
 - Dashboard memory map: kindling models render with their GGUF-header
   resident estimate instead of a placeholder segment — the map is truthful
   during load, not only after.
 - Brain reindex and code-index build embed in concurrent batches
   (3 in flight, `embed_batches`), keeping the GPU fed on large vaults.
+- Animated demo GIF in the README, regenerable with
+  `scripts/capture_demo.py` (Playwright + Pillow against the live demo).
 
 ## 0.2.0 — 2026-08-27
 

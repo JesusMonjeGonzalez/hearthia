@@ -193,6 +193,7 @@ curl -fsSL https://raw.githubusercontent.com/JesusMonjeGonzalez/hearthia/main/pa
 
 ```bash
 hearth models
+hearth est qwen-coder-30b gemma-notes-12b   # what-if: fits together? nothing loads
 hearth warm local-model          # budget-checked; --force overrides
 hearth cool --all
 hearth pull owner/model-GGUF --quant Q4_K_M --add
@@ -200,6 +201,20 @@ hearth status                    # resident RAM, tok/s, TTL countdowns, budget
 hearth logs -f
 hearth doctor
 ```
+
+Planning a loadout before committing RAM:
+
+```text
+$ hearth est qwen3.6-35b-a3b bonsai-ternary-27b qwen3-embedding-0.6b
+  qwen3.6-35b-a3b                    22.6 GiB  weights 20.8 + KV 0.7 GiB @ 32,768 tok ctx
+  bonsai-ternary-27b                  9.1 GiB  weights 6.7 + KV 2.1 GiB @ 16,384 tok ctx
+  qwen3-embedding-0.6b                1.1 GiB  weights 0.6 + KV 0.2 GiB @ 4,096 tok ctx
+  total                              32.8 GiB  of 28.0 GiB wired / 26.3 GiB available
+  ✘ DOES NOT FIT
+```
+
+Lower a context (`hearth est ... --ctx 8192`) and the verdict changes before
+you touch memory.
 
 ## Bring the models you already have
 

@@ -452,6 +452,51 @@ def adopt_ollama(
 
 
 @app.command()
+def est(
+    model_ids: Annotated[
+        list[str], typer.Argument(help="Model ids from the config.")
+    ],
+    ctx: Annotated[
+        int, typer.Option("--ctx", help="Override the context size for every model.")
+    ] = 0,
+) -> None:
+    """What-if: would these models fit in RAM together? Nothing is loaded."""
+    s = Settings()
+    from hearthia.budget import plan_set
+
+    plan = plan_set(
+        _registry(s).models(),
+        list(model_ids),
+        psutil.virtual_memory().total,
+        psutil.virtual_memory().available,
+        extra_ctx=ctx or None,
+    )
+    for m in plan["models"]:
+        if "error" in m:
+            typer.echo(f"  {m['id']:32} — {m['error']}")
+            continue
+        tag = "" if m["known"] else "  (guess)"
+        typer.echo(f"  {m['id']:32} {m['bytes'] / 2**30:6.1f} GiB  {m['detail']}{tag}")
+    total = plan["total_bytes"]
+    wired = plan["wired_limit"]
+    avail = plan["ram_available"]
+    verdict = "FITS" if plan["fits"] else "DOES NOT FIT"
+    mark = "✔" if plan["fits"] else "✘"
+    typer.echo(
+        f"  {'total':32} {total / 2**30:6.1f} GiB  of "
+        f"{wired / 2**30:.1f} GiB wired / {avail / 2**30:.1f} GiB available"
+    )
+    typer.echo(f"  {mark} {verdict}")
+    if plan["unknown_estimates"]:
+        typer.echo(
+            f"  note: {plan['unknown_estimates']} estimate(s) are file-size guesses "
+            "(GGUF header unreadable)"
+        )
+    if not plan["fits"]:
+        raise typer.Exit(1)
+
+
+@app.command()
 def doctor() -> None:
     """Check: llama.cpp present, ports free, wired limit, config valid, disk space."""
     import shutil
