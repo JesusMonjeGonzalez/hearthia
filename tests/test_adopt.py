@@ -21,7 +21,8 @@ def test_scan_dir_missing_root_is_empty(tmp_path):
 
 def test_scan_dir_unreadable_header_is_a_guess(tmp_path):
     p = tmp_path / "mystery.gguf"
-    p.write_bytes(b"\0" * 2 * 2**30)
+    with open(p, "wb") as fh:  # sparse — no allocation
+        fh.truncate(2 * 2**30)
     found = scan_dir(tmp_path)
     assert len(found) == 1
     assert found[0].known is False

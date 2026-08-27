@@ -60,7 +60,8 @@ def test_estimate_falls_back_without_profile(tmp_path):
 def test_plan_warm_blocks_when_over_ceiling(tmp_path, monkeypatch):
     monkeypatch.setattr("hearthia.budget.wired_limit_bytes", lambda total: int(total * 0.75))
     f = tmp_path / "big.gguf"
-    f.write_bytes(b"\0" * (10 * GIB))
+    with open(f, "wb") as fh:  # sparse — no allocation
+        fh.truncate(10 * GIB)
     big = _model("big", file=f)
     d = plan_warm(
         [big],
@@ -78,7 +79,8 @@ def test_plan_warm_blocks_when_over_ceiling(tmp_path, monkeypatch):
 def test_plan_warm_warn_mode_allows_with_warning(tmp_path, monkeypatch):
     monkeypatch.setattr("hearthia.budget.wired_limit_bytes", lambda total: int(total * 0.75))
     f = tmp_path / "big.gguf"
-    f.write_bytes(b"\0" * (30 * GIB))
+    with open(f, "wb") as fh:  # sparse — no allocation
+        fh.truncate(30 * GIB)
     big = _model("big", file=f)
     d = plan_warm(
         [big],
@@ -95,7 +97,8 @@ def test_plan_warm_warn_mode_allows_with_warning(tmp_path, monkeypatch):
 def test_plan_warm_allows_when_it_fits(tmp_path, monkeypatch):
     monkeypatch.setattr("hearthia.budget.wired_limit_bytes", lambda total: int(total * 0.75))
     f = tmp_path / "small.gguf"
-    f.write_bytes(b"\0" * (2 * GIB))
+    with open(f, "wb") as fh:  # sparse — no allocation
+        fh.truncate(2 * GIB)
     small = _model("small", file=f)
     d = plan_warm([small], "small", {}, ram_total=36 * GIB, ram_available=24 * GIB, mode="enforce")
     assert d.allowed is True
