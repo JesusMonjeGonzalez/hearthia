@@ -178,8 +178,8 @@ class Telemetry:
         while True:
             try:
                 await self.poll_upstream_metrics()
-            except Exception:  # noqa: BLE001 — a poll failure must not kill the loop
-                pass
+            except Exception as e:  # noqa: BLE001 — a poll failure must not kill the loop
+                log.debug("metrics poll failed: %s", e)
             await asyncio.sleep(interval)
 
     def snapshot(self) -> dict[str, dict]:
