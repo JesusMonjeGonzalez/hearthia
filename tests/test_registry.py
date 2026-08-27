@@ -20,6 +20,10 @@ def test_models_parses_full_config(config_path, backups_dir):
         temp=0.7,
         embedding=False,
         file=Path("/tmp/models/big.gguf"),
+        cmd=(
+            "/opt/homebrew/bin/llama-server\n--port ${PORT}\n"
+            "--model /tmp/models/big.gguf\n--ctx-size 32768\n--temp 0.7\n"
+        ),
     )
 
     embed = models[1]

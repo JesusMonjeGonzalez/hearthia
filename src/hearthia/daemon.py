@@ -26,16 +26,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if settings is None:
         settings = Settings()
 
+    # one tagged, file-backed logging setup for the daemon and every module
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    try:
+        logs_dir = settings.paths.logs_dir or (settings.paths.stack_dir / "logs")
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(logs_dir / "hearthd.log"))
+    except OSError:
+        pass  # read-only stack dir: console logging still works
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=handlers,
+        force=True,
     )
+    log = logging.getLogger("hearthia.daemon")
 
     gw = Gateway(settings.gateway.url)
     reg = Registry(settings.paths.gateway_config, settings.paths.backups_dir)
     tel = Telemetry(gw)
-    engine = LifecycleEngine(gw, reg, tel, settings.lifecycle)
+    engine = LifecycleEngine(gw, reg, tel, settings.lifecycle, memory_mode=settings.memory.mode)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -44,6 +55,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             asyncio.create_task(tel.run_metrics_poller()),
             asyncio.create_task(engine.run()),
         ]
+        log.info(
+            "hearthd up — gateway %s, memory mode %s",
+            settings.gateway.url,
+            settings.memory.mode if settings.memory else "enforce",
+        )
         try:
             yield
         finally:
@@ -51,6 +67,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             await gw.close()
+            log.info("hearthd stopped")
 
     app = FastAPI(title="Hearthia", lifespan=lifespan)
     app.state.gateway = gw
@@ -68,6 +85,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def reject_foreign_browser_origins(request: Request, call_next):
         origin = request.headers.get("origin")
         if origin is not None and origin not in allowed_origins:
+            log.warning("rejected request from foreign origin %s", origin)
             return JSONResponse({"detail": "Untrusted browser origin"}, status_code=403)
         return await call_next(request)
 

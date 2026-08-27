@@ -77,6 +77,15 @@ body.hearth-warm .ember-mark { color: var(--amber); animation: breathe 3.2s ease
 }
 .brand-name { font: 800 16px/1 var(--display); letter-spacing: 0.16em; }
 .brand-sub { color: var(--dim); font: 11px var(--mono); margin-left: 10px; letter-spacing: 0.06em; }
+.demo-badge {
+  margin-left: 12px;
+  padding: 2px 8px;
+  border: 1px solid #E8A33D;
+  border-radius: 4px;
+  color: #E8A33D;
+  font: 700 10px var(--mono);
+  letter-spacing: 0.14em;
+}
 .endpoints { display: flex; align-items: center; gap: 10px; }
 .endpoints code {
   font: 12px var(--mono); color: var(--dim);

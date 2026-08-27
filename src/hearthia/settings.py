@@ -66,6 +66,23 @@ class BrainSettings(BaseModel):
     vault: Path | None = None
 
 
+class MemorySettings(BaseModel):
+    """Unified-memory budget enforcement.
+
+    enforce — refuse warm requests that would exceed the wired ceiling
+    warn    — allow but surface the budget breach
+    off     — advisory only
+    """
+
+    mode: str = "enforce"
+
+    @model_validator(mode="after")
+    def _valid_mode(self) -> "MemorySettings":
+        if self.mode not in ("enforce", "warn", "off"):
+            raise ValueError("memory.mode must be one of: enforce, warn, off")
+        return self
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="HEARTHIA_",
@@ -76,6 +93,7 @@ class Settings(BaseSettings):
     gateway: GatewaySettings = GatewaySettings()
     daemon: DaemonSettings = DaemonSettings()
     brain: BrainSettings = BrainSettings()
+    memory: MemorySettings = MemorySettings()
     lifecycle: dict[str, str] = {}
 
     @classmethod

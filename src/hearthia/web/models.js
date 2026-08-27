@@ -14,6 +14,7 @@ export async function refreshStatus() {
     const s = await api("/api/status");
     lastStatus = s;
     $("#swap-dot").classList.toggle("up", s.swap_up);
+    $("#demo-badge").hidden = !s.demo;
     document.body.classList.toggle(
       "hearth-warm",
       s.running.some((m) => m.state === "ready"),
@@ -173,7 +174,7 @@ export async function refreshModels() {
           <dt>context</dt><dd>${m.ctx ? m.ctx.toLocaleString() + " tokens" : "model default"}</dd>
           <dt>last speed</dt><dd class="perf">${perf}</dd>
           <dt>auto-unload</dt><dd class="unload-dd" data-ttl="${m.ttl || 0}" data-last="${m.last_activity || 0}" data-lifecycle="${lifecycleTxt ? 1 : 0}"><span class="ttl-wrap"></span>${esc(unloadTxt)}</dd>
-          <dt>weights</dt><dd>${m.size ? fmtGB(m.size) : "–"}</dd>
+          <dt>weights</dt><dd>${m.size ? fmtGB(m.size) : "–"}${m.est_resident ? ` · <span class="est-res" title="From the GGUF header: weights + KV cache at the configured context${m.est_known ? "" : " (file-size guess)"}">est. ${fmtGB(m.est_resident)} resident</span>` : ""}</dd>
         </dl>
         ${m.file_exists ? "" : `<div class="missing">weights file missing — still downloading?</div>`}
         <div class="card-actions">

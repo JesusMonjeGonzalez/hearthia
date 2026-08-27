@@ -7,6 +7,7 @@ from pathlib import Path
 import psutil
 from fastapi import APIRouter, HTTPException, Request
 
+from hearthia.budget import budget_summary, plan_warm_now
 from hearthia.telemetry import llama_server_procs, wired_limit_bytes
 
 router = APIRouter(prefix="/api")
@@ -36,12 +37,14 @@ async def status(request: Request):
     for m in running:
         # llama_server_procs reports the gguf as the full --model path; key by basename
         proc = next((p for p in procs if by_file.get(Path(p["gguf"]).name) == m.get("model")), None)
-        m["rss"] = proc["rss"] if proc else None
+        # a gateway that reports its own rss (e.g. the demo) wins over process probing
+        m["rss"] = proc["rss"] if proc else m.get("rss")
         act = tel.snapshot().get(m.get("model", ""), {})
         m["last_activity"] = act.get("last_activity")
         m["tok_s"] = act.get("tok_s")
 
     return {
+        "demo": bool(getattr(request.app.state, "demo", False)),
         "swap_up": swap_up,
         "health": {
             "events_connected": tel.events_connected,
@@ -73,11 +76,13 @@ async def models(request: Request):
         running_ids[m.get("model", "")] = m.get("state", "unknown")
 
     activity = tel.snapshot()
+    budget = budget_summary(reg.models(), {k: None for k in running_ids})
     out = []
     for model in reg.models():
         f = model.file
         size = f.stat().st_size if f and f.exists() else None
         act = activity.get(model.id, {})
+        est = budget["models"].get(model.id, {})
         out.append(
             {
                 "id": model.id,
@@ -96,6 +101,8 @@ async def models(request: Request):
                 "last_activity": act.get("last_activity"),
                 "tok_s": act.get("tok_s"),
                 "prompt_tok_s": act.get("prompt_tok_s"),
+                "est_resident": est.get("est_resident"),
+                "est_known": est.get("known", False),
             }
         )
     return {"models": out}
@@ -104,11 +111,26 @@ async def models(request: Request):
 @router.post("/models/{model_id}/load")
 async def load_model(model_id: str, request: Request):
     gw = request.app.state.gateway
+    reg = request.app.state.registry
     s = request.app.state.settings
+
+    decision = plan_warm_now(
+        reg.models(),
+        model_id,
+        await gw.running(),
+        mode=s.memory.mode if s.memory else "enforce",
+    )
+    if not decision.allowed:
+        raise HTTPException(409, decision.blocked_reason)
+
     ok = await gw.warm(model_id, timeout=s.gateway.health_timeout)
     if not ok:
         raise HTTPException(502, f"load failed for {model_id}")
-    return {"ok": True}
+    return {
+        "ok": True,
+        "estimate": decision.estimate.resident_bytes if decision.estimate else None,
+        "warning": decision.warning or None,
+    }
 
 
 @router.post("/models/{model_id}/unload")

@@ -50,11 +50,13 @@ class LifecycleEngine:
         reg: Registry,
         telemetry: Telemetry,
         rules: dict[str, str],
+        memory_mode: str = "enforce",
     ) -> None:
         self._gw = gw
         self._reg = reg
         self._tel = telemetry
         self._rules = rules
+        self._memory_mode = memory_mode
         self._loading: set[str] = set()
         self._prev_role_alive: dict[str, bool] = {}
         self._role_died_at: dict[str, float] = {}
@@ -76,6 +78,19 @@ class LifecycleEngine:
             return
         self._loading.add(mid)
         try:
+            if self._memory_mode != "off":
+                from hearthia.budget import plan_warm_now
+
+                decision = plan_warm_now(
+                    self._reg.models(), mid, await self._gw.running(), mode=self._memory_mode
+                )
+                if not decision.allowed:
+                    log.warning(
+                        "lifecycle skipped warming %s — over the RAM budget: %s",
+                        mid,
+                        decision.blocked_reason,
+                    )
+                    return
             await self._gw.warm(mid)
         finally:
             self._loading.discard(mid)

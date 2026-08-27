@@ -90,6 +90,7 @@ async def test_models_list_with_states(config_path, backups_dir):
 
 @respx.mock
 async def test_load_model(config_path, backups_dir):
+    respx.get(f"{BASE}/running").respond(200, json={"running": []})
     respx.get(f"{BASE}/upstream/big-coder/health").respond(200)
     app = _app(config_path, backups_dir)
     async with await _client(app) as client:
@@ -101,11 +102,43 @@ async def test_load_model(config_path, backups_dir):
 
 @respx.mock
 async def test_load_model_failure(config_path, backups_dir):
+    respx.get(f"{BASE}/running").respond(200, json={"running": []})
     respx.get(f"{BASE}/upstream/big-coder/health").mock(side_effect=httpx.ConnectError("down"))
     app = _app(config_path, backups_dir)
     async with await _client(app) as client:
         r = await client.post("/api/models/big-coder/load")
     assert r.status_code == 502
+    await app.state.gateway.close()
+
+
+@respx.mock
+async def test_load_model_blocked_by_budget(config_path, backups_dir, monkeypatch):
+    """A warm that would exceed the RAM budget is refused with 409."""
+    import hearthia.api.models as api_models
+    from hearthia.budget import WarmDecision
+
+    monkeypatch.setattr(
+        api_models,
+        "plan_warm_now",
+        lambda *a, **kw: WarmDecision("big-coder", False, blocked_reason="over budget"),
+    )
+    respx.get(f"{BASE}/running").respond(200, json={"running": []})
+    app = _app(config_path, backups_dir)
+    async with await _client(app) as client:
+        r = await client.post("/api/models/big-coder/load")
+    assert r.status_code == 409
+    assert "over budget" in r.json()["detail"]
+    await app.state.gateway.close()
+
+
+@respx.mock
+async def test_models_list_includes_resident_estimates(config_path, backups_dir):
+    respx.get(f"{BASE}/running").respond(200, json={"running": []})
+    app = _app(config_path, backups_dir)
+    async with await _client(app) as client:
+        r = await client.get("/api/models")
+    big = next(m for m in r.json()["models"] if m["id"] == "big-coder")
+    assert "est_resident" in big and "est_known" in big
     await app.state.gateway.close()
 
 

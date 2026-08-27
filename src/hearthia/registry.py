@@ -28,6 +28,7 @@ class Model:
     temp: float | None
     embedding: bool
     file: Path | None
+    cmd: str = ""
 
 
 class Registry:
@@ -69,6 +70,7 @@ class Registry:
                     temp=float(temp_m.group(1)) if temp_m else None,
                     embedding="--embeddings" in cmd,
                     file=Path(file_m.group(1)) if file_m else None,
+                    cmd=cmd,
                 )
             )
         return out
