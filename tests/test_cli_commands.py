@@ -26,11 +26,36 @@ def test_models_lists_states(tmp_path, config_path):
 
 @respx.mock
 def test_warm_and_cool(tmp_path, config_path):
+    respx.get(f"{GW}/running").respond(200, json={"running": []})
     respx.get(f"{GW}/upstream/big-coder/health").respond(200)
     respx.post(f"{GW}/api/models/unload/big-coder").respond(200)
     env = _env(tmp_path, config_path)
     assert runner.invoke(app, ["warm", "big-coder"], env=env).exit_code == 0
     assert runner.invoke(app, ["cool", "big-coder"], env=env).exit_code == 0
+
+
+@respx.mock
+def test_warm_blocked_by_ram_budget(tmp_path, config_path, monkeypatch):
+    """When the budget says no, warm refuses with 409-worthy detail."""
+    import hearthia.cli as cli
+    from hearthia.budget import WarmDecision
+
+    def blocked(models, candidate_id, running_models, mode):
+        return WarmDecision(
+            candidate_id,
+            False,
+            blocked_reason="does not fit the unified-memory budget",
+        )
+
+    monkeypatch.setattr(cli, "plan_warm_now", blocked, raising=False)
+    respx.get(f"{GW}/running").respond(200, json={"running": []})
+    respx.get(f"{GW}/upstream/big-coder/health").respond(200)
+    result = runner.invoke(app, ["warm", "big-coder"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 1
+    assert "budget" in result.output
+
+    result = runner.invoke(app, ["warm", "big-coder", "--force"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
 
 
 @respx.mock
@@ -47,9 +72,37 @@ def test_status_reports_gateway_down(tmp_path, config_path):
 
     respx.get(f"{GW}/health").mock(side_effect=httpx.ConnectError("down"))
     respx.get(f"{GW}/running").mock(side_effect=httpx.ConnectError("down"))
+    respx.get("http://127.0.0.1:9300/api/status").mock(side_effect=httpx.ConnectError("down"))
     result = runner.invoke(app, ["status"], env=_env(tmp_path, config_path))
     assert result.exit_code == 0
     assert "down" in result.output.lower()
+
+
+@respx.mock
+def test_status_shows_budget_and_speed(tmp_path, config_path):
+    respx.get(f"{GW}/health").respond(200)
+    respx.get(f"{GW}/running").respond(
+        200,
+        json={
+            "running": [
+                {
+                    "model": "big-coder",
+                    "state": "ready",
+                    "rss": 10 * 2**30,
+                    "tok_s": 33.4,
+                }
+            ]
+        },
+    )
+    respx.get("http://127.0.0.1:9300/api/status").respond(
+        200, json={"system": {"wired_limit": 28 * 2**30}}
+    )
+    result = runner.invoke(app, ["status"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "10.0 GiB resident" in result.output
+    assert "33 tok/s" in result.output
+    assert "10.0 GiB committed" in result.output
+    assert "28 GiB wired ceiling" in result.output
 
 
 @respx.mock

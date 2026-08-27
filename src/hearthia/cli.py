@@ -2,15 +2,20 @@
 
 import asyncio
 from pathlib import Path
+from typing import Annotated
 
 import httpx
 import psutil
 import typer
 
 from hearthia import __version__
+from hearthia.budget import WarmDecision, plan_warm_now
+from hearthia.demo import DEMO_PORT
 from hearthia.gateway import Gateway
 from hearthia.registry import Registry
 from hearthia.settings import Settings
+
+DEFAULT_OLLAMA_DIR = Path.home() / ".ollama"
 
 app = typer.Typer(name="hearth", help="Hearthia — control plane for local models.")
 
@@ -65,20 +70,44 @@ def models() -> None:
 
 
 @app.command()
-def warm(model_id: str) -> None:
-    """Load a model into memory (kindling → warm)."""
+def warm(
+    model_id: str,
+    force: bool = typer.Option(False, "--force", help="Warm even if the RAM budget says no."),
+) -> None:
+    """Load a model into memory (kindling → warm), inside the RAM budget."""
     s = Settings()
 
-    async def run() -> bool:
+    async def run() -> tuple[bool, "WarmDecision | None"]:
         gw = Gateway(s.gateway.url)
         try:
-            return await gw.warm(model_id, timeout=s.gateway.health_timeout)
+            running = await gw.running()
+            if force:
+                return await gw.warm(model_id, timeout=s.gateway.health_timeout), None
+            decision = plan_warm_now(
+                _registry(s).models(),
+                model_id,
+                running,
+                mode=s.memory.mode if s.memory else "enforce",
+            )
+            if not decision.allowed:
+                return False, decision
+            ok = await gw.warm(model_id, timeout=s.gateway.health_timeout)
+            return ok, decision
         finally:
             await gw.close()
 
     typer.echo(f"kindling {model_id}…")
-    if not asyncio.run(run()):
-        typer.echo(f"failed to warm {model_id} — is the gateway up? (hearth status)")
+    ok, decision = asyncio.run(run())
+    if decision is not None:
+        for line in decision.lines:
+            typer.echo(line)
+        if decision.warning:
+            typer.echo(f"warning: {decision.warning}")
+    if not ok:
+        if decision is not None and not decision.allowed:
+            typer.echo(decision.blocked_reason)
+        else:
+            typer.echo(f"failed to warm {model_id} — is the gateway up? (hearth status)")
         raise typer.Exit(1)
     typer.echo(f"{model_id} is warm")
 
@@ -108,22 +137,57 @@ def cool(
 
 @app.command()
 def status() -> None:
-    """Gateway health, warm models, and system memory."""
+    """Gateway health, warm models, memory budget, speeds and TTL countdowns."""
+    import time as _time
+
     s = Settings()
 
-    async def run() -> tuple[bool, dict[str, str]]:
+    async def run() -> tuple[bool, list[dict]]:
         gw = Gateway(s.gateway.url)
         try:
-            return await gw.is_up(), await _states(gw)
+            return await gw.is_up(), await gw.running()
         finally:
             await gw.close()
 
-    up, states = asyncio.run(run())
+    up, running = asyncio.run(run())
     vm = psutil.virtual_memory()
     typer.echo(f"gateway   {'up' if up else 'DOWN'}  ({s.gateway.url})")
-    warm_ids = [mid for mid, st in states.items() if st in ("warm", "kindling")] or ["none"]
-    typer.echo(f"warm      {', '.join(warm_ids)}")
+
+    warm_ids = [m.get("model", "") for m in running if m.get("state") in ("warm", "kindling")]
+    typer.echo(f"warm      {', '.join(warm_ids) or 'none'}")
+
+    for m in running:
+        mid = m.get("model", "")
+        bits = []
+        if m.get("rss"):
+            bits.append(f"{m['rss'] / 2**30:.1f} GiB resident")
+        if m.get("tok_s"):
+            bits.append(f"{m['tok_s']:.0f} tok/s")
+        ttl = next((x.ttl for x in _registry(s).models() if x.id == mid), None)
+        last = m.get("last_activity")
+        if ttl and last:
+            left = ttl - (_time.time() - last)
+            if left > 0:
+                bits.append(f"unloads in {int(left // 60)}m{int(left % 60):02d}s")
+        typer.echo(f"  {mid:28} {' · '.join(bits)}")
+
     typer.echo(f"memory    {(vm.total - vm.available) / 2**30:.1f} / {vm.total / 2**30:.0f} GiB")
+
+    # budget line from the daemon when it is up (it knows the wired ceiling)
+    try:
+        import httpx as _httpx
+
+        r = _httpx.get(f"http://{s.daemon.bind}:{s.daemon.port}/api/status", timeout=1.5)
+        sysd = r.json().get("system", {})
+        wired = sysd.get("wired_limit")
+        committed = sum(m.get("rss") or 0 for m in running)
+        if wired:
+            typer.echo(
+                f"budget    {committed / 2**30:.1f} GiB committed "
+                f"of {wired / 2**30:.0f} GiB wired ceiling"
+            )
+    except (_httpx.HTTPError, ValueError):
+        pass
 
 
 @app.command()
@@ -176,6 +240,26 @@ def daemon(
         reload=reload,
         log_level="warning",
     )
+
+
+@app.command()
+def demo(
+    port: int = typer.Option(DEMO_PORT, "--port", help="Dashboard port."),
+    no_open: bool = typer.Option(False, "--no-open", help="Don't open the browser."),
+) -> None:
+    """Run a synthetic demo dashboard — no models, no gateway, no setup."""
+    import threading
+    import webbrowser
+
+    import uvicorn
+
+    from hearthia.demo import create_demo_app
+
+    typer.echo("Hearthia demo — everything you see is synthetic. Ctrl-C to stop.")
+    url = f"http://127.0.0.1:{port}"
+    if not no_open:
+        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
+    uvicorn.run(create_demo_app(), host="127.0.0.1", port=port, log_level="warning")
 
 
 @app.command()
@@ -262,6 +346,98 @@ def restart(service: str = typer.Argument("all", help="gateway | daemon | update
 
 
 @app.command()
+def scan(
+    directory: Annotated[
+        Path | None, typer.Argument(help="Folder to search (default: probe Ollama/LM Studio).")
+    ] = None,
+    add: Annotated[
+        bool, typer.Option("--add", help="Add every found model to the config.")
+    ] = False,
+    ctx: Annotated[int, typer.Option("--ctx", help="Context size for --add blocks.")] = 32768,
+) -> None:
+    """Find GGUF models already on disk and show their real RAM cost."""
+    from hearthia.adopt import default_candidates, scan_dir
+
+    def show(label: str, models) -> None:
+        if not models:
+            return
+        typer.echo(f"  {label}")
+        for m in sorted(models, key=lambda x: x.size_bytes):
+            known = "" if m.known else "  (guess)"
+            typer.echo(
+                f"    {m.name:36} {m.size_bytes / 2**30:6.1f} GiB file"
+                f"  ~{m.est_resident_bytes / 2**30:5.1f} GiB resident{known}"
+            )
+
+    if directory is not None:
+        found = scan_dir(directory)
+        show(str(directory), found)
+    else:
+        found = []
+        for label, models in default_candidates():
+            show(label, models)
+            found.extend(models)
+        if not found:
+            typer.echo("no runtimes probed — pass a folder: hearth scan ~/models")
+
+    if not found:
+        return
+    if add:
+        reg = _registry(s := Settings())
+        added = 0
+        for m in found:
+            try:
+                reg.add_model(m.name, name=m.name, gguf_path=str(m.path), ctx=ctx)
+                added += 1
+            except KeyError:
+                typer.echo(f"  skipped  {m.name} (already in config)")
+        typer.echo(f"added {added} model(s) to {s.paths.gateway_config.name}")
+        typer.echo("apply it: hearth restart gateway")
+    else:
+        typer.echo("add them all: hearth scan --add")
+
+
+@app.command("adopt-ollama")
+def adopt_ollama(
+    add: Annotated[
+        bool, typer.Option("--add", help="Add every Ollama model to the config.")
+    ] = False,
+    ollama_dir: Annotated[
+        Path, typer.Option("--ollama-dir", help="Ollama root directory.")
+    ] = DEFAULT_OLLAMA_DIR,
+    ctx: Annotated[int, typer.Option("--ctx", help="Context size for --add blocks.")] = 32768,
+) -> None:
+    """Bring your Ollama models into Hearthia — no re-downloading 20 GB."""
+    from hearthia.adopt import scan_ollama
+
+    models = scan_ollama(ollama_dir)
+    if not models:
+        typer.echo(f"no Ollama manifests with GGUF blobs under {ollama_dir}")
+        raise typer.Exit(1)
+    typer.echo(f"found {len(models)} model(s) in {ollama_dir}:")
+    for m in sorted(models, key=lambda x: x.size_bytes):
+        known = "" if m.known else "  (guess)"
+        typer.echo(
+            f"  {m.name:36} {m.size_bytes / 2**30:6.1f} GiB file"
+            f"  ~{m.est_resident_bytes / 2**30:5.1f} GiB resident{known}"
+        )
+    if add:
+        s = Settings()
+        reg = _registry(s)
+        added = 0
+        for m in models:
+            try:
+                reg.add_model(m.name, name=m.name, gguf_path=str(m.path), ctx=ctx)
+                added += 1
+            except KeyError:
+                typer.echo(f"  skipped  {m.name} (already in config)")
+        typer.echo(f"added {added} model(s) to {s.paths.gateway_config.name}")
+        typer.echo("apply it: hearth restart gateway")
+    else:
+        typer.echo("add them all: hearth adopt-ollama --add")
+
+
+@app.command()
 def doctor() -> None:
     """Check: llama.cpp present, ports free, wired limit, config valid, disk space."""
     import shutil
@@ -294,6 +470,8 @@ def doctor() -> None:
     total_gib = vm.total / 2**30
     avail_gib = vm.available / 2**30
     typer.echo(f"  [INFO]  memory       {total_gib:.0f} GiB total, {avail_gib:.1f} GiB available")
+    mode = s.memory.mode if s.memory else "enforce"
+    typer.echo(f"  [INFO]  budget gate  {mode} ([memory] mode in config.toml)")
 
     try:
         out = subprocess.run(
