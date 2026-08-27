@@ -1,0 +1,30 @@
+name: Bug report
+description: Something in the hearth is misbehaving.
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Include the dashboard banner text if there was one.
+    validations:
+      required: true
+  - type: textarea
+    id: hearth-output
+    attributes:
+      label: hearth doctor / hearth status output
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: macOS version
+      placeholder: "14.5"
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Logs from ~/.hearthia/logs/ can help (redact freely).

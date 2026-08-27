@@ -1,0 +1,24 @@
+name: Feature idea
+description: Propose an improvement to the hearth.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What can't you do today? What breaks or annoys you?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This keeps Hearthia local-only (no remote binding, no accounts)
+          required: true

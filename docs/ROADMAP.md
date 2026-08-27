@@ -5,8 +5,14 @@ What remains to reach the approved v1 design (spec:
 improvements found while building. Publishing-related work (CI, releases,
 Homebrew tap) is tracked separately and excluded here.
 
-Updated: 2026-07-11 (evening). **Done since the morning list:** P1 items 1, 2,
-3, 5, 6 and P2 items 8, 9, 10, plus persistent chat sampling from P3. Later: download resume (P1.4) shipped with hearth pull CDN-redirect fix; E2E smoke script, README and CHANGELOG shipped. Still open: configurable brain filing (P2.7), pull progress, status TTL/tok_s, numpy fallback decision, parallel embed batches.
+Updated: 2026-08-27. **Shipped since 0.1.0:** the RAM budget gate is
+enforced on every warm path (CLI, dashboard, lifecycle) from GGUF-header
+maths — the old "connect the estimator" handoff item is closed. `hearth
+demo` ships a zero-setup synthetic stack; `scripts/benchmark.py` measures
+resident RAM and KV cost per 1K tokens; the daemon writes `hearthd.log`;
+a Homebrew formula and `curl | sh` installer live under `packaging/`.
+The old `hearth logs`, pull progress and add-to-config items below are
+already in 0.1.0.
 
 ## P1 — spec features still missing
 
