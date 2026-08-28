@@ -125,11 +125,6 @@ wheels = [
 ]
 
 [[package]]
-name = "ggufram"
-version = "0.1.0"
-source = { git = "https://github.com/JesusMonjeGonzalez/ggufram.git?rev=v0.1.0#27bc8c3f0de8cad86077d1c656fd1d452db2f2ad" }
-
-[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -140,11 +135,10 @@ wheels = [
 
 [[package]]
 name = "hearthia"
-version = "0.3.1"
+version = "0.3.2"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
-    { name = "ggufram" },
     { name = "httpx" },
     { name = "psutil" },
     { name = "pydantic-settings" },
@@ -166,7 +160,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
-    { name = "ggufram", git = "https://github.com/JesusMonjeGonzalez/ggufram.git?rev=v0.1.0" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "psutil", specifier = ">=7" },
     { name = "pydantic-settings", specifier = ">=2.6" },

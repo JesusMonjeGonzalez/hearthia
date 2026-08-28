@@ -3,13 +3,15 @@
 What remains beyond the shipped 0.3.0 feature set. Publishing-related work
 (CI, releases, Homebrew tap) is tracked separately and excluded here.
 
-Updated: 2026-08-28. **Shipped in 0.3.1:**
+Updated: 2026-08-28. **Shipped in 0.3.2:**
 
-- **The memory arithmetic is now [ggufram](https://github.com/JesusMonjeGonzalez/ggufram)**,
-  a standalone package (GGUF header reader + KV/RAM maths, pure stdlib)
-  that other tools can adopt; Hearthia depends on it pinned to `v0.1.0`.
-  `hearthia.gguf` / `hearthia.library` re-export the same symbols —
-  behavior unchanged, 308 tests green.
+- **Everything under one roof.** The short-lived `ggufram` standalone
+  extraction is folded back into Hearthia (the repo remains public but
+  Hearthia no longer depends on it). New: `hearth gguf <file>` prices any
+  GGUF on disk from its header alone — geometry, KV cost per 1K tokens,
+  resident estimate — with no config and no gateway.
+
+**Shipped in 0.3.1:** (superseded — the arithmetic is internal again)
 
 **Shipped in 0.3.0:**
 

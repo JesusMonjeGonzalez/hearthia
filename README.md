@@ -83,9 +83,18 @@ KV heads and head dimensions — never with file size:
 ![Why file size lies: KV cache per 1K context tokens](docs/assets/hearthia-budget.svg)
 
 The arithmetic — GGUF header reader, KV-cache bytes, resident-RAM estimate,
-set-fits check — is published standalone as
-[ggufram](https://github.com/JesusMonjeGonzalez/ggufram) (pure stdlib, zero
-dependencies) so any other tool can reuse it. Hearthia is one consumer.
+set-fits check — lives inside Hearthia (pure Python, no extra dependencies)
+and is exposed directly: price any GGUF on disk, even one not in your
+config, without touching a gateway:
+
+```bash
+$ hearth gguf ~/models/Cydonia-24B-Q4_K_M.gguf --ctx 32768
+Cydonia-24B-Q4_K_M.gguf
+  architecture geometry : 40 layers · 8 KV heads · 128+128 head dims
+  weights 13.3 + KV 2.7 GiB @ 32,768 tok ctx
+  KV cost per 1K tokens : 85.0 MiB
+  resident estimate     : 16.7 GiB
+```
 
 The gate is enforced in the CLI, the dashboard, and the lifecycle engine
 (follower models never spawn over budget). Configure it in `config.toml`:
@@ -203,6 +212,7 @@ curl -fsSL https://raw.githubusercontent.com/JesusMonjeGonzalez/hearthia/main/pa
 hearth models
 hearth est qwen-coder-30b gemma-notes-12b   # what-if: fits together? nothing loads
 hearth advise qwen-coder-30b gemma-notes-12b  # doesn't fit? change-sets that do
+hearth gguf ~/models/model.gguf  # header-only cost report for any GGUF on disk
 hearth loadout load coding       # warm a named set under one budget check
 hearth warm local-model          # budget-checked; --force overrides
 hearth cool --all

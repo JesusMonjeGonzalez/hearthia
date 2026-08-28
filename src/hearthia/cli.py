@@ -563,6 +563,67 @@ def _plan_lines(plan: dict) -> list[str]:
     return lines
 
 
+@app.command("gguf")
+def gguf_info(
+    gguf_file: Annotated[Path, typer.Argument(help="Path to a .gguf file.")],
+    ctx: Annotated[int, typer.Option("--ctx", help="Context length override.")] = 0,
+    cache: Annotated[
+        str, typer.Option("--cache", help="KV cache type (f16, q8_0, q5_1, q4_0…).")
+    ] = "q8_0",
+) -> None:
+    """Header-only cost report for a GGUF file — no model data is touched."""
+    from hearthia.gguf import model_ram_profile
+    from hearthia.library import kv_cache_bytes
+
+    profile = model_ram_profile(gguf_file)
+    if profile is None:
+        typer.echo(f"{gguf_file.name}: header unreadable — cannot estimate")
+        raise typer.Exit(1)
+
+    from hearthia.budget import estimate_model_ram
+
+    est = estimate_model_ram(
+        _model_like(gguf_file, ctx or None, cache),
+        profile,
+        ctx=ctx or None,
+    )
+    per_1k = kv_cache_bytes(
+        profile.n_layer,
+        profile.n_kv_heads,
+        profile.k_len,
+        profile.v_len,
+        1024,
+        cache_type=cache,
+    )
+    typer.echo(f"{gguf_file.name}")
+    typer.echo(
+        f"  architecture geometry : {profile.n_layer} layers · "
+        f"{profile.n_kv_heads} KV heads · {profile.k_len}+{profile.v_len} head dims"
+    )
+    typer.echo(f"  {est.detail}")
+    typer.echo(f"  KV cost per 1K tokens : {per_1k / 2**20:.1f} MiB")
+    typer.echo(f"  resident estimate     : {est.resident_bytes / 2**30:.1f} GiB")
+
+
+def _model_like(path: Path, ctx: int | None, cache: str):
+    """Minimal Model shape so the shared estimator can price a bare file."""
+    from hearthia.registry import Model
+
+    return Model(
+        id=path.name,
+        name=path.name,
+        description="",
+        ttl=None,
+        aliases=(),
+        roles=(),
+        ctx=ctx,
+        temp=None,
+        embedding=False,
+        file=path,
+        cmd=f"--cache-type-k {cache} --cache-type-v {cache}",
+    )
+
+
 loadout_app = typer.Typer(name="loadout", help="Warm and cool model sets as one unit.")
 app.add_typer(loadout_app, name="loadout")
 

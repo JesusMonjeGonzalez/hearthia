@@ -199,6 +199,47 @@ def test_mcp_command_exists():
     assert "mcp" in result.output.lower()
 
 
+def test_gguf_reports_cost_for_a_header_file(tmp_path):
+    """hearth gguf prices a bare .gguf from its header — no config, no gateway."""
+    import struct
+
+    def kv_str(key: str, value: str) -> bytes:
+        kb, vb = key.encode(), value.encode()
+        return (
+            struct.pack("<Q", len(kb)) + kb + struct.pack("<I", 8) + struct.pack("<Q", len(vb)) + vb
+        )
+
+    def kv_u32(key: str, value: int) -> bytes:
+        kb = key.encode()
+        return struct.pack("<Q", len(kb)) + kb + struct.pack("<I", 4) + struct.pack("<I", value)
+
+    p = tmp_path / "mini.gguf"
+    p.write_bytes(
+        b"GGUF"
+        + struct.pack("<IQQ", 3, 0, 6)
+        + kv_str("general.architecture", "llama")
+        + kv_u32("llama.block_count", 48)
+        + kv_u32("llama.attention.head_count", 48)
+        + kv_u32("llama.attention.head_count_kv", 8)
+        + kv_u32("llama.attention.key_length", 256)
+        + kv_u32("llama.attention.value_length", 256)
+        + b"\0" * 1_000_000
+    )
+    result = runner.invoke(app, ["gguf", str(p), "--ctx", "32768"])
+    assert result.exit_code == 0
+    assert "48 layers" in result.output and "8 KV heads" in result.output
+    assert "32,768 tok ctx" in result.output
+    assert "MiB" in result.output and "GiB" in result.output
+
+
+def test_gguf_fails_gracefully_on_garbage(tmp_path):
+    p = tmp_path / "bad.gguf"
+    p.write_bytes(b"not a gguf")
+    result = runner.invoke(app, ["gguf", str(p)])
+    assert result.exit_code == 1
+    assert "unreadable" in result.output
+
+
 def test_loadout_list_without_loadouts(tmp_path, config_path):
     result = runner.invoke(app, ["loadout", "list"], env=_env(tmp_path, config_path))
     assert result.exit_code == 0

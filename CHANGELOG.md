@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.2 — 2026-08-28
+
+### Changed
+- **Everything under one roof.** The standalone `ggufram` extraction is
+  folded back into Hearthia: the GGUF header reader and the KV-cache /
+  resident-RAM arithmetic live in `hearthia.gguf` / `hearthia.library`
+  again, with no external dependency.
+
+### Added
+- **`hearth gguf <file>`**: header-only cost report for any GGUF on disk —
+  architecture geometry, KV cost per 1K tokens, resident estimate at a
+  chosen context and cache type — no config, no gateway, no model data
+  touched.
+
 ## 0.3.1 — 2026-08-28
 
 ### Changed
