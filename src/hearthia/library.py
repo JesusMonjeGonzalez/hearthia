@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
+from ggufram import estimate_resident_ram, kv_cache_bytes  # noqa: F401 — re-export
 
 HF_API = "https://huggingface.co/api"
 HF_RESOLVE = "https://huggingface.co"
@@ -70,56 +71,8 @@ def fit_check(file_size: int, available_ram: int, wired_limit: int) -> bool:
     return estimated_ram < wired_limit and estimated_ram < available_ram
 
 
-# Bytes per cached element, including the block scales the quantised
-# formats carry (q8_0 stores 32 values plus one f16 scale, and so on).
-_KV_BYTES_PER_ELEMENT = {
-    "f32": 4.0,
-    "f16": 2.0,
-    "bf16": 2.0,
-    "q8_0": 8.5 / 8,
-    "q5_1": 6.0 / 8,
-    "q5_0": 5.5 / 8,
-    "q4_1": 5.0 / 8,
-    "q4_0": 4.5 / 8,
-}
-
-
-def kv_cache_bytes(
-    n_layer: int,
-    n_kv_heads: int,
-    k_len: int,
-    v_len: int,
-    ctx: int,
-    cache_type: str = "q8_0",
-) -> int:
-    """Exact KV cache size for a model at a given context length.
-
-    The cache scales with layers, KV heads, head dimension and context — never
-    with file size. This is why two models of similar size can differ tenfold:
-    gemma-4-12B costs 408 MB per 1K tokens, Qwen3.6-35B-A3B costs 42.5 MB.
-
-    All parameters come from the GGUF header (`block_count`,
-    `attention.head_count_kv`, `attention.key_length`, `attention.value_length`).
-    """
-    try:
-        bytes_per_element = _KV_BYTES_PER_ELEMENT[cache_type]
-    except KeyError:
-        raise ValueError(
-            f"unknown cache type {cache_type!r}; "
-            f"expected one of {', '.join(sorted(_KV_BYTES_PER_ELEMENT))}"
-        ) from None
-    per_token = n_layer * (k_len + v_len) * n_kv_heads * bytes_per_element
-    return int(per_token * ctx)
-
-
-def estimate_resident_ram(file_size: int, kv_bytes: int, overhead_ratio: float = 0.05) -> int:
-    """RAM a loaded model actually holds: weights + KV cache + compute buffers.
-
-    Weights are memory-mapped but become resident once the GPU wires them, so
-    the file size is the right figure on Apple Silicon.
-    """
-    overhead = max(int(file_size * overhead_ratio), 256 * 1024**2)
-    return file_size + kv_bytes + overhead
+# KV-cache and resident-RAM arithmetic lives in ggufram (published, reusable):
+# hearthia.gguf and hearthia.library re-export it for the rest of the codebase.
 
 
 def set_fits(estimates: list[int], available_ram: int, wired_limit: int) -> bool:

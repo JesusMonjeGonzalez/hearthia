@@ -82,6 +82,11 @@ KV heads and head dimensions — never with file size:
 
 ![Why file size lies: KV cache per 1K context tokens](docs/assets/hearthia-budget.svg)
 
+The arithmetic — GGUF header reader, KV-cache bytes, resident-RAM estimate,
+set-fits check — is published standalone as
+[ggufram](https://github.com/JesusMonjeGonzalez/ggufram) (pure stdlib, zero
+dependencies) so any other tool can reuse it. Hearthia is one consumer.
+
 The gate is enforced in the CLI, the dashboard, and the lifecycle engine
 (follower models never spawn over budget). Configure it in `config.toml`:
 

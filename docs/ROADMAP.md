@@ -3,7 +3,15 @@
 What remains beyond the shipped 0.3.0 feature set. Publishing-related work
 (CI, releases, Homebrew tap) is tracked separately and excluded here.
 
-Updated: 2026-08-28. **Shipped in 0.3.0:**
+Updated: 2026-08-28. **Shipped in 0.3.1:**
+
+- **The memory arithmetic is now [ggufram](https://github.com/JesusMonjeGonzalez/ggufram)**,
+  a standalone package (GGUF header reader + KV/RAM maths, pure stdlib)
+  that other tools can adopt; Hearthia depends on it pinned to `v0.1.0`.
+  `hearthia.gguf` / `hearthia.library` re-export the same symbols —
+  behavior unchanged, 308 tests green.
+
+**Shipped in 0.3.0:**
 
 - **MCP server** (`hearth mcp`): stdio JSON-RPC with the stdlib only —
   agents (OpenCode, Zed, Claude…) get budget-enforced warm/cool, what-if

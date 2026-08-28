@@ -1,6 +1,6 @@
 [project]
 name = "hearthia"
-version = "0.3.0"
+version = "0.3.1"
 description = "The self-tending fire for local models — a control plane for llama.cpp on Apple Silicon."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -14,6 +14,7 @@ classifiers = [
 ]
 dependencies = [
     "fastapi>=0.115",
+    "ggufram @ git+https://github.com/JesusMonjeGonzalez/ggufram.git@v0.1.0",
     "httpx>=0.28",
     "psutil>=7",
     "pydantic-settings>=2.6",
@@ -46,6 +47,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hearthia"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.1 — 2026-08-28
+
+### Changed
+- **Extracted the memory arithmetic into [ggufram](https://github.com/JesusMonjeGonzalez/ggufram)**,
+  a standalone, dependency-free package (GGUF header reader, KV-cache
+  bytes, resident-RAM estimate, set-fits check). Hearthia now depends on
+  it (pinned to `v0.1.0`); `hearthia.gguf` and `hearthia.library`
+  re-export the same symbols, so behavior and the public surface are
+  unchanged — every other tool can now use the arithmetic the budget
+  gate enforces.
+
 ## 0.3.0 — 2026-08-28
 
 The agent-interaction release: Hearthia becomes tooling that AI agents can
