@@ -191,3 +191,62 @@ def test_logs_command_exists():
     result = runner.invoke(app, ["logs", "--help"])
     assert result.exit_code == 0
     assert "follow" in result.output.lower()
+
+
+def test_mcp_command_exists():
+    result = runner.invoke(app, ["mcp", "--help"])
+    assert result.exit_code == 0
+    assert "mcp" in result.output.lower()
+
+
+def test_loadout_list_without_loadouts(tmp_path, config_path):
+    result = runner.invoke(app, ["loadout", "list"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "no loadouts defined" in result.output
+    assert "[loadouts." in result.output  # shows how to declare one
+
+
+@respx.mock
+def test_loadout_load_warms_members(tmp_path, config_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        f'[paths]\nstack_dir = "{config_path.parent}"\n\n'
+        "[loadouts.coding]\n"
+        'models = ["big-coder", "tiny-embed"]\n'
+    )
+    respx.get(f"{GW}/running").respond(200, json={"running": []})
+    respx.get(f"{GW}/upstream/big-coder/health").respond(200)
+    respx.get(f"{GW}/upstream/tiny-embed/health").respond(200)
+    result = runner.invoke(app, ["loadout", "load", "coding"], env={"HEARTHIA_CONFIG": str(cfg)})
+    assert result.exit_code == 0
+    assert "big-coder" in result.output and "tiny-embed" in result.output
+    assert "ready" in result.output
+
+
+def test_loadout_load_unknown(tmp_path, config_path):
+    result = runner.invoke(app, ["loadout", "load", "nope"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 1
+    assert "not defined" in result.output
+
+
+@respx.mock
+def test_est_hints_at_advise_when_it_does_not_fit(tmp_path, config_path, monkeypatch):
+    import hearthia.budget as budget
+
+    monkeypatch.setattr(budget, "wired_limit_bytes", lambda total: 1)
+    respx.get(f"{GW}/running").respond(200, json={"running": []})
+    result = runner.invoke(app, ["est", "big-coder", "tiny-embed"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 1
+    assert "hearth advise" in result.output
+
+
+@respx.mock
+def test_advise_prints_options_when_blocked(tmp_path, config_path, monkeypatch):
+    monkeypatch.setattr("hearthia.budget.wired_limit_bytes", lambda total: 1)
+    respx.get(f"{GW}/running").respond(200, json={"running": []})
+    result = runner.invoke(
+        app, ["advise", "big-coder", "tiny-embed"], env=_env(tmp_path, config_path)
+    )
+    assert "does not fit" in result.output
+    # either a change-set fits, or the honest answer is that none does
+    assert any(word in result.output for word in ("ctx", "cool", "no simple change-set"))

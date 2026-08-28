@@ -64,6 +64,21 @@ class DaemonSettings(BaseModel):
 
 class BrainSettings(BaseModel):
     vault: Path | None = None
+    # folders the AI filing may choose from (first is the fallback inbox)
+    folders: list[str] = [
+        "00 Inbox",
+        "03 Resources/Code Snippets",
+        "03 Resources/Tools & Configs",
+    ]
+    # optional path to a custom filing prompt (UTF-8, {text} placeholder)
+    prompt_path: Path | None = None
+
+
+class LoadoutSettings(BaseModel):
+    """A named set of models warmed and cooled as one unit."""
+
+    models: list[str] = []
+    description: str = ""
 
 
 class MemorySettings(BaseModel):
@@ -94,6 +109,7 @@ class Settings(BaseSettings):
     daemon: DaemonSettings = DaemonSettings()
     brain: BrainSettings = BrainSettings()
     memory: MemorySettings = MemorySettings()
+    loadouts: dict[str, LoadoutSettings] = {}
     lifecycle: dict[str, str] = {}
 
     @classmethod

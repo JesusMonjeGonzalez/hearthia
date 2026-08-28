@@ -16,6 +16,13 @@ indexes, logs or credentials.
 - Context tools can read files available to the local process; use a dedicated local user if needed.
 - Model downloads require a file published by Hugging Face with a verifiable SHA-256.
 - Configuration replacement is atomic and keeps a local backup.
+- The MCP server (`hearth mcp`) has no network listener: it speaks stdio with
+  the client that launched it and acts with that user's permissions — the same
+  single-user boundary as the CLI. Warm tools enforce the RAM budget gate;
+  there are no file-write tools.
+- Brain filing constrains the model-chosen folder to the configured
+  `[brain].folders` list and sanitises the title, so model output cannot
+  traverse paths when a note is written.
 
 ## Reporting
 

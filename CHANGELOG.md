@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.3.0 — 2026-08-28
+
+The agent-interaction release: Hearthia becomes tooling that AI agents can
+use themselves, plus smarter memory planning for humans.
+
+### Added
+- **MCP server** (`hearth mcp`): speaks the Model Context Protocol over
+  stdio with the standard library only — zero new dependencies. Agents
+  (OpenCode, Zed, Claude Desktop/Code) get eight budget-enforced tools:
+  status, models, warm, cool, est, advise, loadout and Brain search. A
+  refused warm returns the arithmetic plus fit options, so an agent adapts
+  instead of failing. Setup for every client in `docs/MCP.md`.
+- **`hearth advise`**: when a set of models does not fit, enumerate the
+  uniform change-sets that make it fit — KV-cache quantisation (keeps
+  context), lower context (keeps precision), cooling a running model —
+  ranked and printed with the GGUF-header arithmetic. Nothing loads.
+- **Named loadouts**: `[loadouts.<name>]` in config.toml defines a set;
+  `hearth loadout list|show|load|cool` warms and cools it as one unit.
+  Loading runs a whole-set budget check first, then per-model
+  budget-checked warms in order; already-warm members are skipped.
+- **`GET /api/health`**: aggregate probe (gateway up, event watcher
+  connected, no crash loop) for monitors and scripts.
+- **Configurable Brain filing**: `[brain].folders` (with the first as the
+  fallback inbox) and `[brain].prompt_path` replace the hardcoded vault
+  layout; the JSON schema for the filing model is built from the folders.
+- `hearth est` now points at `hearth advise` when the verdict is DOES NOT
+  FIT.
+
 ## 0.2.2 — 2026-08-27
 
 ### Added

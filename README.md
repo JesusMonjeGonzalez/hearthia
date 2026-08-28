@@ -104,6 +104,8 @@ uv run scripts/benchmark.py
 - **Round-trip configuration:** edits `llama-swap.yaml` without destroying comments and rotates backups.
 - **Local Brain:** indexes an optional Obsidian vault with sqlite-vec and local embeddings.
 - **Loopback-only services:** the daemon rejects non-loopback binds and rejects foreign browser origins.
+- **MCP server:** agents (OpenCode, Zed, Claude…) manage warm/cool/est/Brain search themselves — budget-enforced. See [`docs/MCP.md`](docs/MCP.md).
+- **Loadouts & advisor:** `hearth loadout load coding` warms a named set under one whole-set check; `hearth advise` proposes KV-quantisation/context/cooling change-sets when a set doesn't fit.
 
 ## Architecture
 
@@ -195,6 +197,8 @@ curl -fsSL https://raw.githubusercontent.com/JesusMonjeGonzalez/hearthia/main/pa
 ```bash
 hearth models
 hearth est qwen-coder-30b gemma-notes-12b   # what-if: fits together? nothing loads
+hearth advise qwen-coder-30b gemma-notes-12b  # doesn't fit? change-sets that do
+hearth loadout load coding       # warm a named set under one budget check
 hearth warm local-model          # budget-checked; --force overrides
 hearth cool --all
 hearth pull owner/model-GGUF --quant Q4_K_M --add
@@ -215,7 +219,52 @@ $ hearth est qwen3.8-27b qwen3-embedding-0.6b
 ```
 
 Lower a context (`hearth est ... --ctx 8192`) or add a third model and the
-verdict changes before you touch memory.
+verdict changes before you touch memory. When a set **doesn't** fit, don't
+guess — ask for the change-sets that would fit:
+
+```text
+$ hearth advise qwen-coder-30b gemma-notes-12b
+  as configured: 33.3 GiB does not fit (28.0 GiB wired / 24.1 GiB available)
+  1. every model at ctx 32,768 · KV q4_0
+  2. every model at ctx 16,384 · KV q8_0
+     qwen-coder-30b   19.8 →  17.2 GiB  weights 16.4 + KV 0.4 GiB @ 16,384 tok ctx (q8_0)
+  3. cool ollama-llama3.3 (frees 20.5 GiB)
+```
+
+Each option is one pair of flags applied to the models' `cmd` — nothing is
+loaded until you choose.
+
+## Named loadouts
+
+Warm a whole working set as one unit — declared in `config.toml`:
+
+```toml
+[loadouts.coding]
+description = "Flagship coder + embeddings helper"
+models = ["qwen-coder-30b", "qwen3-embedding-0.6b"]
+```
+
+```bash
+hearth loadout list            # what's defined
+hearth loadout show coding     # what-if against the current resident set
+hearth loadout load coding     # whole-set budget check, then warm in order
+hearth loadout cool coding
+```
+
+## Let agents tend the fire: MCP
+
+Hearthia ships a [Model Context Protocol](https://modelcontextprotocol.io)
+server, so coding agents can warm what they need before they need it — and
+never exceed the budget on their own:
+
+```json
+{ "mcpServers": { "hearthia": { "command": "hearth", "args": ["mcp"] } } }
+```
+
+An agent can call `hearthia_est` before choosing a model, `hearthia_warm`
+under the same RAM gate as the CLI, `hearthia_loadout` for named sets, and
+`hearthia_brain_search` over the vault. Full setup for Claude Desktop, Claude
+Code, OpenCode and Zed in [`docs/MCP.md`](docs/MCP.md).
 
 ## Bring the models you already have
 
@@ -262,6 +311,7 @@ overridden with variables such as `HEARTHIA_MEMORY__MODE=warn`.
 
 - Hearthia is a **single-user local tool**, not a multi-user server.
 - Services are enforced to loopback and do not implement user authentication; remote binding is rejected.
+- The MCP server is stdio-only (no network listener) and inherits this same local single-user boundary; its warm tools enforce the RAM budget gate.
 - Chat filesystem tools can read/search paths available to the local process; write operations are disabled.
 - Model-fit estimates are header-derived and conservative, but the wired-limit ceiling is the enforced guarantee — verify real memory pressure when using `--force`.
 - Model behavior and compatibility depend on the installed llama.cpp/llama-swap versions.

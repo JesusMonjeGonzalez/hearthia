@@ -13,6 +13,26 @@ from hearthia.telemetry import llama_server_procs, wired_limit_bytes
 router = APIRouter(prefix="/api")
 
 
+@router.get("/health")
+async def health(request: Request):
+    """Lightweight aggregate health probe for monitors and scripts.
+
+    ok is true only when every subsystem is healthy: the gateway answers, the
+    daemon's event watcher is connected, and no model server is crash-looping.
+    """
+    gw = request.app.state.gateway
+    tel = request.app.state.telemetry
+    gateway_up = await gw.is_up()
+    events = tel.events_connected
+    crash = tel.crash_looping()
+    return {
+        "ok": gateway_up and events and not crash,
+        "gateway": gateway_up,
+        "events_connected": events,
+        "crash_loop": crash,
+    }
+
+
 @router.get("/status")
 async def status(request: Request):
     gw = request.app.state.gateway

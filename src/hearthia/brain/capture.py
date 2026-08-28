@@ -14,18 +14,7 @@ from pathlib import Path
 
 import httpx
 
-FOLDERS = ["00 Inbox", "03 Resources/Code Snippets", "03 Resources/Tools & Configs"]
-
-SCHEMA = {
-    "type": "object",
-    "properties": {
-        "title": {"type": "string", "maxLength": 80},
-        "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
-        "folder": {"type": "string", "enum": FOLDERS},
-        "language": {"type": "string"},
-    },
-    "required": ["title", "tags", "folder"],
-}
+DEFAULT_FOLDERS = ["00 Inbox", "03 Resources/Code Snippets", "03 Resources/Tools & Configs"]
 
 PROMPT = """You file notes into a PARA second brain for a software engineer.
 Given a captured note, return JSON with:
@@ -40,6 +29,30 @@ Note:
 ---
 {text}
 ---"""
+
+
+def load_prompt(prompt_path) -> str:
+    """Custom filing prompt from disk ({text} placeholder), or the default."""
+    if prompt_path is None:
+        return PROMPT
+    try:
+        text = Path(prompt_path).read_text()
+        return text if "{text}" in text else PROMPT
+    except OSError:
+        return PROMPT
+
+
+def build_schema(folders: list[str]) -> dict:
+    return {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "maxLength": 80},
+            "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
+            "folder": {"type": "string", "enum": list(folders)},
+            "language": {"type": "string"},
+        },
+        "required": ["title", "tags", "folder"],
+    }
 
 
 def get_text(args: list[str] | None = None, stdin: str | None = None) -> str:
@@ -68,17 +81,22 @@ async def classify(
     text: str,
     gateway_url: str,
     model: str = "fast",
+    folders: list[str] | None = None,
+    prompt_path=None,
 ) -> dict | None:
     """Classify a note using the local model. Returns None if model is down."""
+    folders = folders or DEFAULT_FOLDERS
     body = json.dumps(
         {
             "model": model,
             "max_tokens": 300,
             "temperature": 0.1,
-            "messages": [{"role": "user", "content": PROMPT.format(text=text[:4000])}],
+            "messages": [
+                {"role": "user", "content": load_prompt(prompt_path).format(text=text[:4000])}
+            ],
             "response_format": {
                 "type": "json_schema",
-                "json_schema": {"name": "note_meta", "schema": SCHEMA},
+                "json_schema": {"name": "note_meta", "schema": build_schema(folders)},
             },
         }
     ).encode()
@@ -106,17 +124,20 @@ def write_note(
     vault: Path,
     text: str,
     meta: dict | None = None,
+    folders: list[str] | None = None,
 ) -> str:
     """Write a note to the vault. Returns the path written."""
+    folders = folders or DEFAULT_FOLDERS
+    inbox = folders[0]
     now = datetime.datetime.now()
     if meta:
         title = safe_name(meta.get("title", ""))
         tags = meta.get("tags", []) or ["capture"]
-        folder = meta.get("folder") if meta.get("folder") in FOLDERS else "00 Inbox"
+        folder = meta.get("folder") if meta.get("folder") in folders else inbox
         lang = meta.get("language", "")
     else:
         title = f"Capture {now:%Y-%m-%d %H%M%S}"
-        tags, folder, lang = ["capture", "unfiled"], "00 Inbox", ""
+        tags, folder, lang = ["capture", "unfiled"], inbox, ""
 
     dest_dir = vault / str(folder)
     dest_dir.mkdir(parents=True, exist_ok=True)

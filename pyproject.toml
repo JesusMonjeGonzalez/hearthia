@@ -1,6 +1,6 @@
 [project]
 name = "hearthia"
-version = "0.2.2"
+version = "0.3.0"
 description = "The self-tending fire for local models — a control plane for llama.cpp on Apple Silicon."
 readme = "README.md"
 requires-python = ">=3.12"

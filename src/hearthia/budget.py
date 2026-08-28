@@ -285,3 +285,199 @@ def budget_summary(models: list[Model], running: dict[str, int | None]) -> dict:
         "committed": resident,
         "models": per_model,
     }
+
+
+# ── KV-cache advisor ─────────────────────────────────────────────────────────
+#
+# When a loadout does not fit, the honest levers are: quantise the KV cache
+# (nearly invisible in quality, huge in bytes), lower the context, or cool a
+# running model. advise_fit enumerates those levers from the GGUF-header maths
+# the budget gate already uses and returns only options that actually fit.
+
+
+@dataclass(frozen=True)
+class AdviseOption:
+    """One concrete change-set that makes a wanted set fit the budget."""
+
+    kind: str  # "warm" (change flags) | "cool" (unload a running model)
+    label: str  # human description of the change
+    flags: str  # llama.cpp flags to apply ("" for cool options)
+    total_bytes: int
+    lines: list[str] = field(default_factory=list)
+
+
+_CTX_LADDER = (4096, 8192, 16384, 32768, 65536, 131072, 262144)
+_CACHE_LADDER = ("f16", "q8_0", "q5_1", "q5_0", "q4_0")
+_MAX_OPTIONS = 5
+_MAX_COMBOS = 50_000
+
+
+def _ctx_variants(ctx: int | None) -> list[int]:
+    """The configured context plus the two ladder steps below it."""
+    if not ctx:
+        return []
+    below = [c for c in _CTX_LADDER if c < ctx][-2:]
+    return [ctx, *reversed(below)]
+
+
+def _variant_estimate(
+    model: Model, profile: RamProfile, ctx: int, cache_type: str
+) -> ModelEstimate:
+    file_size = model.file.stat().st_size if model.file and model.file.exists() else 0
+    if not file_size:
+        file_size = profile.file_size
+    kv = kv_cache_bytes(
+        profile.n_layer,
+        profile.n_kv_heads,
+        profile.k_len,
+        profile.v_len,
+        ctx,
+        cache_type=cache_type,
+    )
+    est = estimate_resident_ram(file_size, kv)
+    detail = (
+        f"weights {file_size / 2**30:.1f} + KV {kv / 2**30:.1f} GiB "
+        f"@ {ctx:,} tok ctx ({cache_type})"
+    )
+    return ModelEstimate(model.id, est, True, detail)
+
+
+def _resident_lines(
+    by_id: dict[str, Model], running: dict[str, int | None]
+) -> tuple[int, list[str]]:
+    resident = 0
+    lines: list[str] = []
+    for mid, rss in running.items():
+        m = by_id.get(mid)
+        if rss:
+            resident += rss
+            lines.append(f"  running  {mid:24} {rss / 2**30:6.1f} GiB  measured")
+        elif m is not None:
+            est = estimate_model_ram(m, profile_for(m))
+            resident += est.resident_bytes
+            tag = "" if est.known else "  (guess)"
+            lines.append(f"  running  {mid:24} {est.resident_bytes / 2**30:6.1f} GiB{tag}")
+    return resident, lines
+
+
+def advise_fit(
+    models: list[Model],
+    wanted_ids: list[str],
+    running: dict[str, int | None],
+    ram_total: int,
+    ram_available: int,
+) -> dict:
+    """Enumerate the change-sets that make ``wanted_ids`` fit the budget.
+
+    Levers, in preference order: KV-cache quantisation (keeps context), lower
+    context (keeps precision), cooling a running model. Each warm option is a
+    uniform target — one context and one KV cache type for the whole set — so
+    the advice is a single pair of flags per model. Nothing is loaded or
+    unloaded: pure planning on the same header maths the budget gate enforces.
+    """
+    by_id = {m.id: m for m in models}
+    wired = wired_limit_bytes(ram_total)
+    resident, _ = _resident_lines(by_id, running)
+
+    wanted = [mid for mid in wanted_ids if mid not in running]
+    base: dict[str, ModelEstimate] = {}
+    profiles: dict[str, RamProfile | None] = {}
+    for mid in wanted:
+        m = by_id.get(mid)
+        if m is None:
+            continue
+        profiles[mid] = profile_for(m)
+        base[mid] = estimate_model_ram(m, profiles[mid])
+    as_configured = resident + sum(e.resident_bytes for e in base.values())
+    fits_now = as_configured < wired and as_configured < ram_available
+
+    options: list[AdviseOption] = []
+    if not fits_now:
+        # one uniform target (ctx, cache type) applied to every wanted model:
+        # advice must be actionable as a single set of flags per model
+        ctxs = sorted(
+            {
+                c
+                for mid in wanted
+                if (prof := profiles[mid]) and (ctx0 := by_id[mid].ctx or prof.context_length)
+                for c in _ctx_variants(ctx0)
+            },
+            reverse=True,
+        )
+        scored: list[tuple[int, int, int, int, str, list[str]]] = []
+        for ctx in ctxs:
+            for ct in _CACHE_LADDER:
+                total = resident
+                changed: list[str] = []
+                for mid in wanted:
+                    m = by_id.get(mid)
+                    if m is None:
+                        continue
+                    prof = profiles[mid]
+                    if prof is None:
+                        est = base[mid]  # unreadable header: nothing to vary
+                    else:
+                        est = _variant_estimate(m, prof, ctx, ct)
+                    total += est.resident_bytes
+                    prev = base.get(mid)
+                    if prev is not None and est.resident_bytes != prev.resident_bytes:
+                        changed.append(
+                            f"  {mid:24} {prev.resident_bytes / 2**30:6.1f} → "
+                            f"{est.resident_bytes / 2**30:5.1f} GiB  {est.detail}"
+                        )
+                if not (total < wired and total < ram_available):
+                    continue
+                precision = _CACHE_LADDER.index(ct)
+                scored.append((-ctx, precision, total, ctx, ct, changed))
+        scored.sort(key=lambda s: (s[0], s[1], s[2]))
+
+        for _nctx, _prec, total, ctx, ct, changed in scored[:_MAX_OPTIONS]:
+            options.append(
+                AdviseOption(
+                    "warm",
+                    f"every model at ctx {ctx:,} · KV {ct}",
+                    f"--ctx-size {ctx} --cache-type-k {ct} --cache-type-v {ct}",
+                    total,
+                    [
+                        *changed,
+                        f"  total     {total / 2**30:6.1f} GiB of "
+                        f"{wired / 2**30:.1f} GiB wired, "
+                        f"{ram_available / 2**30:.1f} GiB available",
+                    ],
+                )
+            )
+
+        # cooling levers: unload a running model nobody in the set needs
+        for mid, rss in running.items():
+            if mid in wanted:
+                continue
+            free = rss
+            if not free:
+                m = by_id.get(mid)
+                free = estimate_model_ram(m, profile_for(m)).resident_bytes if m else 0
+            if not free:
+                continue
+            total = as_configured - free
+            if total < wired and total < ram_available:
+                options.append(
+                    AdviseOption(
+                        "cool",
+                        f"cool {mid} (frees {free / 2**30:.1f} GiB)",
+                        "",
+                        total,
+                        [
+                            f"  cool     {mid:24} frees {free / 2**30:5.1f} GiB",
+                            f"  total     {total / 2**30:6.1f} GiB of "
+                            f"{wired / 2**30:.1f} GiB wired, "
+                            f"{ram_available / 2**30:.1f} GiB available",
+                        ],
+                    )
+                )
+
+    return {
+        "fits": fits_now,
+        "total_bytes": as_configured,
+        "wired_limit": wired,
+        "ram_available": ram_available,
+        "options": options,
+    }

@@ -491,7 +491,203 @@ def est(
             "(GGUF header unreadable)"
         )
     if not plan["fits"]:
+        typer.echo("  options that fit: hearth advise " + " ".join(model_ids))
         raise typer.Exit(1)
+
+
+@app.command()
+def advise(
+    model_ids: Annotated[list[str], typer.Argument(help="Model ids from the config.")],
+) -> None:
+    """Change-sets that make these models fit: KV quantisation, ctx, cooling."""
+    s = Settings()
+    from hearthia.budget import advise_fit, plan_set, running_resident
+
+    reg = _registry(s)
+    gw = Gateway(s.gateway.url)
+
+    async def run() -> tuple[dict, dict]:
+        try:
+            return advise_fit(
+                reg.models(),
+                list(model_ids),
+                running_resident(await gw.running()),
+                psutil.virtual_memory().total,
+                psutil.virtual_memory().available,
+            ), plan_set(
+                reg.models(),
+                list(model_ids),
+                psutil.virtual_memory().total,
+                psutil.virtual_memory().available,
+            )
+        finally:
+            await gw.close()
+
+    advice, plan = asyncio.run(run())
+    if advice["fits"]:
+        typer.echo("  the set fits as configured:")
+        for line in _plan_lines(plan):
+            typer.echo(line)
+        return
+    typer.echo(
+        f"  as configured: {advice['total_bytes'] / 2**30:.1f} GiB does not fit "
+        f"({advice['wired_limit'] / 2**30:.1f} GiB wired / "
+        f"{advice['ram_available'] / 2**30:.1f} GiB available)"
+    )
+    if not advice["options"]:
+        typer.echo(
+            "  no simple change-set makes it fit — cool everything and retry, "
+            "or pick smaller weights"
+        )
+        raise typer.Exit(1)
+    for i, o in enumerate(advice["options"], 1):
+        typer.echo(f"  {i}. {o.label}")
+        for line in o.lines:
+            typer.echo(line)
+    typer.echo("nothing was loaded — apply a change-set to the model's cmd and restart the gateway")
+
+
+def _plan_lines(plan: dict) -> list[str]:
+    lines = []
+    for m in plan["models"]:
+        if "error" in m:
+            lines.append(f"  {m['id']:32} — {m['error']}")
+            continue
+        tag = "" if m["known"] else "  (guess)"
+        lines.append(f"  {m['id']:32} {m['bytes'] / 2**30:6.1f} GiB  {m['detail']}{tag}")
+    lines.append(
+        f"  {'total':32} {plan['total_bytes'] / 2**30:6.1f} GiB  of "
+        f"{plan['wired_limit'] / 2**30:.1f} GiB wired / "
+        f"{plan['ram_available'] / 2**30:.1f} GiB available"
+    )
+    return lines
+
+
+loadout_app = typer.Typer(name="loadout", help="Warm and cool model sets as one unit.")
+app.add_typer(loadout_app, name="loadout")
+
+
+@loadout_app.command("list")
+def loadout_list() -> None:
+    """Show the loadouts defined in config.toml, with a fit verdict for each."""
+    s = Settings()
+    from hearthia.loadouts import defined_loadouts
+
+    loadouts = defined_loadouts(s)
+    if not loadouts:
+        typer.echo("no loadouts defined — add to ~/.config/hearthia/config.toml:")
+        typer.echo("  [loadouts.coding]")
+        typer.echo('  description = "Flagship coder + embeddings"')
+        typer.echo('  models = ["qwen-coder-30b", "qwen3-embedding-0.6b"]')
+        return
+    for name, cfg in sorted(loadouts.items()):
+        typer.echo(
+            f"  {name:16} {', '.join(cfg['models'])}"
+            + (f"  — {cfg['description']}" if cfg["description"] else "")
+        )
+
+
+@loadout_app.command("show")
+def loadout_show(name: str = typer.Argument(..., help="Loadout name.")) -> None:
+    """What-if: would this loadout fit right now? Nothing is loaded."""
+    s = Settings()
+    from hearthia.loadouts import loadout_plan
+
+    reg = _registry(s)
+    gw = Gateway(s.gateway.url)
+
+    async def run() -> dict:
+        try:
+            return await loadout_plan(s, gw, reg, name)
+        finally:
+            await gw.close()
+
+    result = asyncio.run(run())
+    if "error" in result:
+        typer.echo(result["error"])
+        raise typer.Exit(1)
+    if result["description"]:
+        typer.echo(f"  {result['name']}: {result['description']}")
+    for line in _plan_lines(result["cold_plan"]):
+        typer.echo(line)
+    mark = "✔" if result["fits"] else "✘"
+    typer.echo(f"  {mark} {'FITS now' if result['fits'] else 'DOES NOT FIT now'}")
+
+
+@loadout_app.command("load")
+def loadout_load_cmd(name: str = typer.Argument(..., help="Loadout name.")) -> None:
+    """Warm a loadout: whole-set budget check, then warm each model in order."""
+    s = Settings()
+    from hearthia.loadouts import loadout_load
+
+    reg = _registry(s)
+    gw = Gateway(s.gateway.url)
+
+    async def run() -> dict:
+        try:
+            return await loadout_load(s, gw, reg, name)
+        finally:
+            await gw.close()
+
+    result = asyncio.run(run())
+    if result.get("error"):
+        typer.echo(result["error"])
+        advice = result.get("advice") or {}
+        for o in (advice.get("options") or [])[:3]:
+            typer.echo(f"  · {o.label}")
+        typer.echo("nothing was loaded")
+        raise typer.Exit(1)
+    if result["warmed"]:
+        for mid in result["warmed"]:
+            typer.echo(f"  warm  {mid}")
+    if result["skipped"]:
+        for mid in result["skipped"]:
+            typer.echo(f"  warm  {mid} (already warm)")
+    if result["refused"]:
+        r = result["refused"]
+        typer.echo(f"  refused {r['model']}: {r['blocked_reason']}")
+        for line in r.get("lines", []):
+            typer.echo(line)
+        raise typer.Exit(1)
+    typer.echo(f"loadout '{name}' is ready")
+
+
+@loadout_app.command("cool")
+def loadout_cool_cmd(name: str = typer.Argument(..., help="Loadout name.")) -> None:
+    """Cool the warm members of a loadout."""
+    s = Settings()
+    from hearthia.loadouts import loadout_cool
+
+    reg = _registry(s)
+    gw = Gateway(s.gateway.url)
+
+    async def run() -> dict:
+        try:
+            return await loadout_cool(s, gw, reg, name)
+        finally:
+            await gw.close()
+
+    result = asyncio.run(run())
+    if result.get("error"):
+        typer.echo(result["error"])
+        raise typer.Exit(1)
+    for mid in result["cooled"]:
+        typer.echo(f"  cooled  {mid}")
+    for mid in result["failed"]:
+        typer.echo(f"  FAILED  {mid}")
+    if result["failed"]:
+        raise typer.Exit(1)
+
+
+@app.command()
+def mcp() -> None:
+    """Run the MCP server (stdio) — let AI agents manage the hearth."""
+    from hearthia.mcp import serve
+
+    try:
+        asyncio.run(serve())
+    except KeyboardInterrupt:
+        pass
 
 
 @app.command()
@@ -736,10 +932,16 @@ def brain_capture(
 
     async def run() -> None:
         async with httpx.AsyncClient() as client:
-            meta = await classify(client, raw, s.gateway.url)
+            meta = await classify(
+                client,
+                raw,
+                s.gateway.url,
+                folders=s.brain.folders,
+                prompt_path=s.brain.prompt_path,
+            )
         if meta is None:
-            typer.echo("(model offline — filing raw into 00 Inbox)", err=True)
-        path = write_note(vault, raw, meta)
+            typer.echo("(model offline — filing raw into " + s.brain.folders[0] + ")", err=True)
+        path = write_note(vault, raw, meta, folders=s.brain.folders)
         typer.echo(path)
 
     asyncio.run(run())
