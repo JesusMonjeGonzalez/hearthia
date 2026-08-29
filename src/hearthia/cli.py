@@ -136,6 +136,23 @@ def cool(
 
 
 @app.command()
+def purge() -> None:
+    """Release inactive file cache pages before loading a model (sudo purge)."""
+    import shutil
+    import subprocess
+
+    if not shutil.which("purge"):
+        typer.echo("purge not found on this system")
+        raise typer.Exit(1)
+    try:
+        subprocess.run(["sudo", "purge"], check=True)
+    except subprocess.CalledProcessError as e:
+        typer.echo(f"purge failed (exit {e.returncode})")
+        raise typer.Exit(e.returncode)
+    typer.echo("purged inactive file cache pages")
+
+
+@app.command()
 def status() -> None:
     """Gateway health, warm models, memory budget, speeds and TTL countdowns."""
     import time as _time
