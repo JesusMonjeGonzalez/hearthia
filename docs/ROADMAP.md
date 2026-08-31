@@ -1,9 +1,15 @@
 # Hearthia — Roadmap
 
-What remains beyond the shipped 0.3.0 feature set. Publishing-related work
+What remains beyond the shipped 0.4.0 feature set. Publishing-related work
 (CI, releases, Homebrew tap) is tracked separately and excluded here.
 
-Updated: 2026-08-28. **Shipped in 0.3.2:**
+Updated: 2026-08-31. **Shipped in 0.4.0:**
+
+- **TreePact facade.** Human-operated `hearth treepact` commands launch and
+  inspect governed runs through a version-pinned subprocess. The dashboard and
+  API expose only TreePact's bounded, read-only review contract.
+
+**Shipped in 0.3.2:**
 
 - **Everything under one roof.** The short-lived `ggufram` standalone
   extraction is folded back into Hearthia (the repo remains public but

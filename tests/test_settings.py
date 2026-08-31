@@ -14,7 +14,7 @@ def test_defaults_without_config_file(monkeypatch, tmp_path):
     assert s.daemon.bind == "127.0.0.1"
     assert s.brain.vault is None
     assert s.treepact.executable is None
-    assert s.treepact.expected_version == "0.1.0"
+    assert s.treepact.expected_version == "0.2.0"
     assert s.treepact.loadout is None
     assert s.lifecycle == {}
     assert s.paths.models_dir == s.paths.stack_dir / "models"
@@ -28,7 +28,7 @@ def test_toml_file_is_read(monkeypatch, tmp_path):
         '[paths]\nstack_dir = "/tmp/stack"\n\n'
         "[gateway]\nport = 9393\n\n"
         '[brain]\nvault = "/tmp/vault"\n\n'
-        '[treepact]\nexecutable = "/tmp/treepact"\nexpected_version = "0.1.0"\n'
+        '[treepact]\nexecutable = "/tmp/treepact"\nexpected_version = "0.2.0"\n'
         'loadout = "coding"\n\n'
         '[lifecycle]\n"qwen2.5-coder-1.5b" = "app:Visual Studio Code"\n'
     )

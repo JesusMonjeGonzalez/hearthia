@@ -102,7 +102,7 @@ class TreePactSettings(BaseModel):
     """Compatibility contract for the separately installed TreePact CLI."""
 
     executable: Path | None = None
-    expected_version: str = "0.1.0"
+    expected_version: str = "0.2.0"
     loadout: str | None = None
 
 

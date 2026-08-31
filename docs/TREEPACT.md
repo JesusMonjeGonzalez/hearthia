@@ -14,13 +14,13 @@ uv tool install /path/to/TreePact
 treepact --version
 ```
 
-Hearthia currently requires TreePact `0.1.0`. If it is not on `PATH`, configure
+Hearthia currently requires TreePact `0.2.0`. If it is not on `PATH`, configure
 the absolute executable path:
 
 ```toml
 [treepact]
 executable = "/absolute/path/to/treepact"
-expected_version = "0.1.0"
+expected_version = "0.2.0"
 loadout = "treepact-coding"
 
 [loadouts.treepact-coding]

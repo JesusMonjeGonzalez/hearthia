@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.0 — 2026-08-31
+
 ### Added
 - **TreePact facade** (`hearth treepact doctor|validate|run`): a human-operated,
   version-pinned subprocess bridge to TreePact's independent worktree, gate and
