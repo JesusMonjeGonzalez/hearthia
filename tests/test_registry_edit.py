@@ -1,6 +1,7 @@
 import pytest
 
 from hearthia.registry import Registry
+from hearthia.settings import LoadoutSettings
 
 
 def test_set_ttl_preserves_comments(config_path, backups_dir):
@@ -159,3 +160,45 @@ def test_rapid_saves_keep_distinct_backups(config_path, backups_dir):
     assert len(backups) == 2
     # Filenames should be different
     assert backups[0].name != backups[1].name
+
+
+def test_sync_loadouts_projects_membership_and_preserves_roles(config_path, backups_dir):
+    reg = Registry(config_path, backups_dir)
+    loadouts = {
+        "coding": LoadoutSettings(models=["big-coder"]),
+        "notes": LoadoutSettings(models=["big-coder", "tiny-embed"]),
+    }
+
+    result = reg.sync_loadouts(loadouts)
+
+    assert result["changed"] == ["big-coder", "tiny-embed"]
+    models = {model.id: model for model in reg.models()}
+    assert models["big-coder"].loadouts == ("coding", "notes")
+    assert models["big-coder"].roles == ("chat",)
+    assert models["tiny-embed"].loadouts == ("notes",)
+    assert len(list(backups_dir.glob("llama-swap-*.yaml"))) == 1
+
+
+def test_sync_loadouts_removes_stale_membership_without_repeated_backup(config_path, backups_dir):
+    reg = Registry(config_path, backups_dir)
+    reg.sync_loadouts({"coding": LoadoutSettings(models=["big-coder"])})
+    assert len(list(backups_dir.glob("llama-swap-*.yaml"))) == 1
+
+    result = reg.sync_loadouts({})
+
+    assert result["changed"] == ["big-coder"]
+    assert reg.models()[0].loadouts == ()
+    assert len(list(backups_dir.glob("llama-swap-*.yaml"))) == 2
+    assert reg.sync_loadouts({})["changed"] == []
+    assert len(list(backups_dir.glob("llama-swap-*.yaml"))) == 2
+
+
+def test_sync_loadouts_rejects_unknown_models_without_writing(config_path, backups_dir):
+    reg = Registry(config_path, backups_dir)
+    original = config_path.read_text()
+
+    with pytest.raises(KeyError, match="unknown models"):
+        reg.sync_loadouts({"coding": LoadoutSettings(models=["missing"])})
+
+    assert config_path.read_text() == original
+    assert not backups_dir.exists()

@@ -133,3 +133,26 @@ async def test_loadout_cool_only_warm_members(tmp_path):
     result = await loadout_cool(s, gw, _reg(tmp_path), "coding")
     assert result["ok"] is True
     assert result["cooled"] == ["tiny-embed"]
+
+
+async def test_loadout_cool_preserves_members_shared_with_another_loadout(tmp_path):
+    s = _settings(
+        tmp_path,
+        {
+            "coding": LoadoutSettings(models=["big-coder", "tiny-embed"]),
+            "notes": LoadoutSettings(models=["tiny-embed"]),
+        },
+    )
+    gw = StubGateway(
+        running=[
+            {"model": "big-coder", "state": "ready"},
+            {"model": "tiny-embed", "state": "ready"},
+        ]
+    )
+
+    result = await loadout_cool(s, gw, _reg(tmp_path), "coding")
+
+    assert result["ok"] is True
+    assert result["cooled"] == ["big-coder"]
+    assert result["preserved_shared"] == [{"model": "tiny-embed", "loadouts": ["notes"]}]
+    assert gw.cooled == ["big-coder"]

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added
+
+- `hearth loadout sync` projects the authoritative `[loadouts]` configuration
+  into readable `metadata.loadout` fields while preserving model roles and YAML
+  comments.
+- Model API responses and dashboard cards expose current loadout membership.
+
+### Changed
+
+- Cooling a loadout preserves models declared in another loadout and reports the
+  shared membership instead of freeing a model another working set still needs.
+
 ## 0.4.0 — 2026-08-31
 
 ### Added

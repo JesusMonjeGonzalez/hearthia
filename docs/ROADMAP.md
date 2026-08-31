@@ -9,6 +9,11 @@ Updated: 2026-08-31. **Shipped in 0.4.0:**
   inspect governed runs through a version-pinned subprocess. The dashboard and
   API expose only TreePact's bounded, read-only review contract.
 
+**Unreleased:**
+
+- Loadout membership is projected into registry metadata, exposed in the model
+  API/dashboard, and shared models are preserved during loadout cooling.
+
 **Shipped in 0.3.2:**
 
 - **Everything under one roof.** The short-lived `ggufram` standalone

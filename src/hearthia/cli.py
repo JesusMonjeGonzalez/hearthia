@@ -825,6 +825,23 @@ def loadout_list() -> None:
         )
 
 
+@loadout_app.command("sync")
+def loadout_sync() -> None:
+    """Project config.toml loadout membership into llama-swap metadata."""
+    s = Settings()
+    try:
+        result = _registry(s).sync_loadouts(s.loadouts)
+    except (KeyError, ValueError) as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(1) from exc
+    if not result["changed"]:
+        typer.echo("loadout metadata is already synchronized")
+        return
+    for model_id in result["changed"]:
+        names = result["memberships"].get(model_id, [])
+        typer.echo(f"  synced  {model_id}: {', '.join(names) or 'none'}")
+
+
 @loadout_app.command("show")
 def loadout_show(name: str = typer.Argument(..., help="Loadout name.")) -> None:
     """What-if: would this loadout fit right now? Nothing is loaded."""
@@ -911,6 +928,10 @@ def loadout_cool_cmd(name: str = typer.Argument(..., help="Loadout name.")) -> N
         raise typer.Exit(1)
     for mid in result["cooled"]:
         typer.echo(f"  cooled  {mid}")
+    for item in result.get("preserved_shared", []):
+        typer.echo(
+            f"  kept    {item['model']} (shared with {', '.join(item['loadouts'])})"
+        )
     for mid in result["failed"]:
         typer.echo(f"  FAILED  {mid}")
     if result["failed"]:

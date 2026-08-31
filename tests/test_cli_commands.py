@@ -323,6 +323,52 @@ def test_loadout_list_without_loadouts(tmp_path, config_path):
     assert "[loadouts." in result.output  # shows how to declare one
 
 
+def test_loadout_sync_projects_metadata(tmp_path, config_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        f'[paths]\nstack_dir = "{config_path.parent}"\n\n'
+        "[loadouts.coding]\n"
+        'models = ["big-coder"]\n'
+    )
+
+    result = runner.invoke(app, ["loadout", "sync"], env={"HEARTHIA_CONFIG": str(cfg)})
+
+    assert result.exit_code == 0
+    assert "synced  big-coder: coding" in result.output
+
+    second = runner.invoke(app, ["loadout", "sync"], env={"HEARTHIA_CONFIG": str(cfg)})
+    assert second.exit_code == 0
+    assert "already synchronized" in second.output
+
+
+@respx.mock
+def test_loadout_cool_reports_shared_members(tmp_path, config_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        f'[paths]\nstack_dir = "{config_path.parent}"\n\n'
+        "[loadouts.coding]\n"
+        'models = ["big-coder", "tiny-embed"]\n\n'
+        "[loadouts.notes]\n"
+        'models = ["tiny-embed"]\n'
+    )
+    respx.get(f"{GW}/running").respond(
+        200,
+        json={
+            "running": [
+                {"model": "big-coder", "state": "ready"},
+                {"model": "tiny-embed", "state": "ready"},
+            ]
+        },
+    )
+    respx.post(f"{GW}/api/models/unload/big-coder").respond(200)
+
+    result = runner.invoke(app, ["loadout", "cool", "coding"], env={"HEARTHIA_CONFIG": str(cfg)})
+
+    assert result.exit_code == 0
+    assert "cooled  big-coder" in result.output
+    assert "kept    tiny-embed (shared with notes)" in result.output
+
+
 @respx.mock
 def test_loadout_load_warms_members(tmp_path, config_path):
     cfg = tmp_path / "config.toml"

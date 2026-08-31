@@ -17,7 +17,7 @@
   <a href="https://github.com/JesusMonjeGonzalez/hearthia/releases/tag/v0.4.0"><img src="https://img.shields.io/badge/release-v0.4.0-E8A33D" alt="Release v0.4.0"></a>
   <img src="https://img.shields.io/badge/macOS-Apple%20Silicon-111111?logo=apple" alt="macOS Apple Silicon">
   <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" alt="Python 3.12+">
-  <img src="https://img.shields.io/badge/tests-350%20passing-2EA043" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-358%20passing-2EA043" alt="Tests">
   <img src="https://img.shields.io/badge/status-active%20development-E8A33D" alt="Active development">
 </p>
 
@@ -127,7 +127,7 @@ uv run scripts/benchmark.py
   versioned `review` contract — never a database Hearthia opens itself.
   TreePact remains the independent authority for worktrees, gates and
   evidence. See [`docs/TREEPACT.md`](docs/TREEPACT.md).
-- **Loadouts & advisor:** `hearth loadout load coding` warms a named set under one whole-set check; `hearth advise` proposes KV-quantisation/context/cooling change-sets when a set doesn't fit.
+- **Loadouts & advisor:** `hearth loadout load coding` warms a named set under one whole-set check; `hearth loadout cool coding` preserves models shared by another declared loadout; `hearth advise` proposes KV-quantisation/context/cooling change-sets when a set doesn't fit.
 
 ## Architecture
 
@@ -269,9 +269,10 @@ models = ["qwen-coder-30b", "qwen3-embedding-0.6b"]
 
 ```bash
 hearth loadout list            # what's defined
+hearth loadout sync            # project membership into llama-swap metadata
 hearth loadout show coding     # what-if against the current resident set
 hearth loadout load coding     # whole-set budget check, then warm in order
-hearth loadout cool coding
+hearth loadout cool coding     # exclusive members cool; shared members stay warm
 ```
 
 ## Let agents tend the fire: MCP

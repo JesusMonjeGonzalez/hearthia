@@ -97,3 +97,25 @@ models:
     # The tightened regex stops at the second dot, capturing "0.5" and
     # ignoring the trailing ".1" rather than raising inside float().
     assert models[0].temp == 0.5
+
+
+def test_models_reads_scalar_and_list_loadout_metadata(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """\
+models:
+  scalar:
+    cmd: llama-server --model /tmp/scalar.gguf
+    metadata:
+      loadout: coding
+  shared:
+    cmd: llama-server --model /tmp/shared.gguf
+    metadata:
+      loadout: [coding, notes]
+"""
+    )
+
+    models = Registry(config_path, tmp_path / "backups").models()
+
+    assert models[0].loadouts == ("coding",)
+    assert models[1].loadouts == ("coding", "notes")

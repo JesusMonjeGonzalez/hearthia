@@ -159,6 +159,9 @@ export async function refreshModels() {
       const perf = m.tok_s
         ? `${m.tok_s.toFixed(1)} tok/s gen${m.prompt_tok_s ? " · " + m.prompt_tok_s.toFixed(0) + " tok/s prompt" : ""}`
         : "–";
+      const loadoutBadges = (m.loadouts || []).length
+        ? `<div class="loadout-badges">${m.loadouts.map((name) => `<span class="loadout-badge">${esc(name)}</span>`).join("")}</div>`
+        : "";
       const lifecycleTxt = m.roles && m.roles.length
         ? "🔗 " + m.roles.map(esc).join(", ")
         : "";
@@ -168,10 +171,11 @@ export async function refreshModels() {
           ? "after " + m.ttl + " s idle"
           : "never";
       card.innerHTML = `
-        <div class="card-head"><h3>${esc(m.name)}</h3>
-          <span class="state ember-${esc(emberState)}">${esc(emberState)}</span></div>
-        <p class="desc">${esc(m.description || "")}</p>
-        <dl>
+         <div class="card-head"><h3>${esc(m.name)}</h3>
+           <span class="state ember-${esc(emberState)}">${esc(emberState)}</span></div>
+         <p class="desc">${esc(m.description || "")}</p>
+         ${loadoutBadges}
+         <dl>
           <dt>id</dt><dd>${esc(m.id)}${m.aliases.length ? " · " + m.aliases.map(esc).join(", ") : ""}</dd>
           <dt>context</dt><dd>${m.ctx ? m.ctx.toLocaleString() + " tokens" : "model default"}</dd>
           <dt>last speed</dt><dd class="perf">${perf}</dd>

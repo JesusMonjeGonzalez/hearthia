@@ -6,13 +6,13 @@ from httpx import ASGITransport
 from hearthia.api.models import router
 from hearthia.gateway import Gateway
 from hearthia.registry import Registry
-from hearthia.settings import PathsSettings, Settings
+from hearthia.settings import LoadoutSettings, PathsSettings, Settings
 from hearthia.telemetry import Telemetry
 
 BASE = "http://127.0.0.1:9292"
 
 
-def _app(config_path, backups_dir, tel=None):
+def _app(config_path, backups_dir, tel=None, loadouts=None):
     app = FastAPI()
     app.state.gateway = Gateway(BASE)
     app.state.registry = Registry(config_path, backups_dir)
@@ -22,7 +22,7 @@ def _app(config_path, backups_dir, tel=None):
         models_dir=config_path.parent,
         logs_dir=config_path.parent,
     )
-    app.state.settings = Settings(paths=paths)
+    app.state.settings = Settings(paths=paths, loadouts=loadouts or {})
     app.include_router(router)
     return app
 
@@ -85,6 +85,26 @@ async def test_models_list_with_states(config_path, backups_dir):
     assert tiny["state"] == "stopped"
     assert tiny["embedding"] is True
     assert "embed" in tiny["roles"]
+    await app.state.gateway.close()
+
+
+@respx.mock
+async def test_models_list_includes_current_loadouts(config_path, backups_dir):
+    respx.get(f"{BASE}/running").respond(200, json={"running": []})
+    app = _app(
+        config_path,
+        backups_dir,
+        loadouts={
+            "coding": LoadoutSettings(models=["big-coder"]),
+            "notes": LoadoutSettings(models=["big-coder", "tiny-embed"]),
+        },
+    )
+    async with await _client(app) as client:
+        r = await client.get("/api/models")
+
+    models = {model["id"]: model for model in r.json()["models"]}
+    assert models["big-coder"]["loadouts"] == ["coding", "notes"]
+    assert models["tiny-embed"]["loadouts"] == ["notes"]
     await app.state.gateway.close()
 
 

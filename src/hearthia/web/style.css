@@ -194,6 +194,8 @@ h2 { font: 600 13px var(--display); text-transform: uppercase; letter-spacing: 0
 .card-head h3 { margin: 0; font: 600 15px var(--display); }
 .state { font: 700 10px var(--mono); letter-spacing: 0.1em; padding: 3px 8px; border-radius: 20px; text-transform: uppercase; }
 .card .desc { color: var(--dim); font-size: 13px; margin: 0; }
+.loadout-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.loadout-badge { border: 1px solid var(--line-warm); border-radius: 999px; color: var(--amber-hi); padding: 2px 7px; font: 10px var(--mono); }
 .card dl {
   display: grid; grid-template-columns: auto 1fr; gap: 2px 14px; margin: 4px 0;
   font: 12px var(--mono); color: var(--dim);

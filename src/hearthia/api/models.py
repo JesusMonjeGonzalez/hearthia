@@ -90,15 +90,16 @@ async def models(request: Request):
     gw = request.app.state.gateway
     reg = request.app.state.registry
     tel = request.app.state.telemetry
+    settings = request.app.state.settings
 
     running_ids: dict[str, str] = {}
     for m in await gw.running():
         running_ids[m.get("model", "")] = m.get("state", "unknown")
 
     activity = tel.snapshot()
-    budget = budget_summary(reg.models(), {k: None for k in running_ids})
+    budget = budget_summary(reg.models(settings.loadouts), {k: None for k in running_ids})
     out = []
-    for model in reg.models():
+    for model in reg.models(settings.loadouts):
         f = model.file
         size = f.stat().st_size if f and f.exists() else None
         act = activity.get(model.id, {})
@@ -118,6 +119,7 @@ async def models(request: Request):
                 "size": size,
                 "state": running_ids.get(model.id, "stopped"),
                 "roles": list(model.roles),
+                "loadouts": list(model.loadouts),
                 "last_activity": act.get("last_activity"),
                 "tok_s": act.get("tok_s"),
                 "prompt_tok_s": act.get("prompt_tok_s"),

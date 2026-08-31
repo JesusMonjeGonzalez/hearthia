@@ -4,6 +4,7 @@ import io
 import os
 import re
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,25 @@ from ruamel.yaml import YAML
 _RE_FILE = re.compile(r"--model(?:\s+|=)(\S+\.gguf)")
 _RE_CTX = re.compile(r"--ctx-size(?:\s+|=)(\d+)")
 _RE_TEMP = re.compile(r"--temp(?:\s+|=)(\d+(?:\.\d+)?)")
+
+
+def _loadout_model_ids(config: Any) -> list[str]:
+    raw = getattr(config, "models", None)
+    if raw is None and isinstance(config, Mapping):
+        raw = config.get("models")
+    return [str(model_id) for model_id in (raw or []) if str(model_id)]
+
+
+def _loadout_names(loadouts: Mapping[str, Any] | None, model_id: str) -> tuple[str, ...]:
+    if loadouts is None:
+        return ()
+    return tuple(
+        sorted(
+            str(name)
+            for name, config in loadouts.items()
+            if model_id in _loadout_model_ids(config)
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -29,6 +49,7 @@ class Model:
     embedding: bool
     file: Path | None
     cmd: str = ""
+    loadouts: tuple[str, ...] = ()
 
 
 class Registry:
@@ -47,7 +68,7 @@ class Registry:
             cmd = cmd.replace("${" + str(key) + "}", str(value))
         return cmd
 
-    def models(self) -> list[Model]:
+    def models(self, loadouts: Mapping[str, Any] | None = None) -> list[Model]:
         doc = self.load()
         macros = doc.get("macros") or {}
         out: list[Model] = []
@@ -58,9 +79,21 @@ class Registry:
             ctx_m = _RE_CTX.search(cmd)
             temp_m = _RE_TEMP.search(cmd)
             meta = mcfg.get("metadata") or {}
+            model_id = str(mid)
+            configured_loadouts = _loadout_names(loadouts, model_id)
+            if loadouts is None:
+                raw_loadouts = meta.get("loadout")
+                if isinstance(raw_loadouts, str):
+                    model_loadouts = (raw_loadouts,)
+                elif isinstance(raw_loadouts, (list, tuple)):
+                    model_loadouts = tuple(str(name) for name in raw_loadouts if str(name))
+                else:
+                    model_loadouts = ()
+            else:
+                model_loadouts = configured_loadouts
             out.append(
                 Model(
-                    id=str(mid),
+                    id=model_id,
                     name=str(mcfg.get("name", mid)),
                     description=str(mcfg.get("description", "")),
                     ttl=mcfg.get("ttl"),
@@ -71,9 +104,60 @@ class Registry:
                     embedding="--embeddings" in cmd,
                     file=Path(file_m.group(1)) if file_m else None,
                     cmd=cmd,
+                    loadouts=model_loadouts,
                 )
             )
         return out
+
+    def sync_loadouts(self, loadouts: Mapping[str, Any]) -> dict[str, Any]:
+        """Project configured loadout membership into YAML metadata.
+
+        TOML settings remain the source of truth. The YAML field is a readable
+        projection for tools that only inspect the model registry.
+        """
+        doc = self.load()
+        models = doc.get("models") or {}
+        memberships: dict[str, list[str]] = {}
+        missing: dict[str, list[str]] = {}
+        model_ids = {str(model_id) for model_id in models}
+        for name, cfg in loadouts.items():
+            configured_models = _loadout_model_ids(cfg)
+            unknown = sorted(set(configured_models) - model_ids)
+            if unknown:
+                missing[str(name)] = unknown
+            for model_id in configured_models:
+                memberships.setdefault(model_id, []).append(str(name))
+        if missing:
+            details = "; ".join(
+                f"{name}: {', '.join(ids)}" for name, ids in sorted(missing.items())
+            )
+            raise KeyError(f"loadout references unknown models ({details})")
+
+        changed: list[str] = []
+        for model_id, block in models.items():
+            if not isinstance(block, Mapping):
+                raise ValueError(f"model '{model_id}' has invalid YAML block")
+            names = sorted(set(memberships.get(str(model_id), [])))
+            metadata = block.get("metadata")
+            if metadata is None:
+                metadata = {}
+                if names:
+                    block["metadata"] = metadata
+            elif not isinstance(metadata, Mapping):
+                raise ValueError(f"model '{model_id}' has invalid metadata")
+
+            desired = names[0] if len(names) == 1 else names
+            if names:
+                if metadata.get("loadout") != desired:
+                    metadata["loadout"] = desired
+                    changed.append(str(model_id))
+            elif "loadout" in metadata:
+                del metadata["loadout"]
+                changed.append(str(model_id))
+
+        if changed:
+            self.save(doc)
+        return {"changed": changed, "memberships": memberships}
 
     def _model_block(self, doc: Any, model_id: str) -> Any:
         block = (doc.get("models") or {}).get(model_id)

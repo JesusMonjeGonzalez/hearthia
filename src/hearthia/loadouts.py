@@ -161,18 +161,34 @@ async def loadout_load(s: Settings, gw: Gateway, reg: Registry, name: str) -> di
 
 
 async def loadout_cool(s: Settings, gw: Gateway, reg: Registry, name: str) -> dict:
-    """Cool the members of a loadout that are warm."""
+    """Cool exclusive members while preserving models shared by another loadout."""
     cfg = get_loadout(s, name)
     if cfg is None:
         return {"ok": False, "error": f"loadout '{name}' is not defined in config.toml"}
     running = {m.get("model", "") for m in await gw.running()}
     cooled: list[str] = []
     failed: list[str] = []
+    preserved_shared: list[dict] = []
+    all_loadouts = defined_loadouts(s)
     for mid in cfg["models"]:
         if mid not in running:
+            continue
+        shared_with = sorted(
+            other_name
+            for other_name, other_cfg in all_loadouts.items()
+            if other_name != name and mid in other_cfg["models"]
+        )
+        if shared_with:
+            preserved_shared.append({"model": mid, "loadouts": shared_with})
             continue
         if await gw.cool(mid):
             cooled.append(mid)
         else:
             failed.append(mid)
-    return {"ok": not failed, "name": name, "cooled": cooled, "failed": failed}
+    return {
+        "ok": not failed,
+        "name": name,
+        "cooled": cooled,
+        "failed": failed,
+        "preserved_shared": preserved_shared,
+    }
