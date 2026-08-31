@@ -1,11 +1,12 @@
 """MCP server: JSON-RPC handling, tool listing and budget-safe tool calls."""
 
+import asyncio
 import json
 
 import respx
 
 import hearthia.mcp as mcp_module
-from hearthia.mcp import TOOLS, _handle
+from hearthia.mcp import RESOURCES, TOOLS, _handle
 from hearthia.settings import Settings
 
 GIB = 2**30
@@ -57,7 +58,7 @@ async def test_initialize_returns_protocol_and_server_info():
     assert reply["result"]["protocolVersion"] == "2025-06-18"
     assert reply["result"]["serverInfo"]["name"] == "hearthia"
     assert "tools" in reply["result"]["capabilities"]
-    assert "resources" in reply["result"]["capabilities"]
+    assert reply["result"]["capabilities"]["resources"]["subscribe"] is True
 
 
 async def test_notifications_are_not_answered():
@@ -106,6 +107,94 @@ async def test_resources_list_schemas():
         assert resource["name"]
         assert resource["description"]
         assert resource["mimeType"] in {"application/json", "text/plain"}
+
+
+async def test_resources_are_json_serializable():
+    json.dumps(RESOURCES)
+
+
+async def test_resource_subscribe_and_unsubscribe_update_state():
+    subscriptions: set[str] = set()
+    subscribe = await _handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 12,
+            "method": "resources/subscribe",
+            "params": {"uri": "hearthia://health"},
+        },
+        Settings(),
+        subscriptions,
+    )
+    assert subscribe["result"] == {}
+    assert subscriptions == {"hearthia://health"}
+
+    unsubscribe = await _handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 13,
+            "method": "resources/unsubscribe",
+            "params": {"uri": "hearthia://health"},
+        },
+        Settings(),
+        subscriptions,
+    )
+    assert unsubscribe["result"] == {}
+    assert not subscriptions
+
+
+async def test_logs_can_be_subscribed():
+    subscriptions: set[str] = set()
+    reply = await _handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 14,
+            "method": "resources/subscribe",
+            "params": {"uri": "hearthia://logs/recent"},
+        },
+        Settings(),
+        subscriptions,
+    )
+    assert reply["result"] == {}
+    assert subscriptions == {"hearthia://logs/recent"}
+
+
+async def test_resource_updated_notification_shape():
+    notification = mcp_module._resource_updated("hearthia://health")
+    assert notification == {
+        "jsonrpc": "2.0",
+        "method": "notifications/resources/updated",
+        "params": {"uri": "hearthia://health"},
+    }
+
+
+def test_status_timestamp_does_not_trigger_resource_change():
+    first = json.dumps({"ok": True, "time": 1})
+    second = json.dumps({"ok": True, "time": 2})
+    first_key = mcp_module._resource_change_key("hearthia://status", first)
+    second_key = mcp_module._resource_change_key("hearthia://status", second)
+    assert first_key == second_key
+
+
+async def test_subscription_watcher_notifies_when_snapshot_changes(monkeypatch):
+    snapshots = iter(["one", "two"])
+
+    async def fake_health(settings):
+        return "application/json", next(snapshots)
+
+    monkeypatch.setitem(mcp_module._RESOURCE_FUNCS, "hearthia://health", fake_health)
+    monkeypatch.setattr(mcp_module, "_RESOURCE_POLL_SECONDS", 0.01)
+    subscriptions = {"hearthia://health"}
+    outgoing: asyncio.Queue[dict | None] = asyncio.Queue()
+    stopped = asyncio.Event()
+    watcher = asyncio.create_task(
+        mcp_module._watch_resource_subscriptions(Settings(), subscriptions, outgoing, stopped)
+    )
+    try:
+        notification = await asyncio.wait_for(outgoing.get(), timeout=0.2)
+        assert notification == mcp_module._resource_updated("hearthia://health")
+    finally:
+        stopped.set()
+        await watcher
 
 
 @respx.mock

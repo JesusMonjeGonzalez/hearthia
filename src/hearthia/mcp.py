@@ -230,6 +230,12 @@ _RESOURCE_FUNCS = {
     "hearthia://health": _resource_health,
     "hearthia://logs/recent": _resource_logs,
 }
+_SUBSCRIBABLE_RESOURCES = {
+    "hearthia://status",
+    "hearthia://health",
+    "hearthia://logs/recent",
+}
+_RESOURCE_POLL_SECONDS = 5.0
 
 
 async def _tool_status(s: Settings, args: dict) -> str:
@@ -485,7 +491,9 @@ def _err(msg_id: Any, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": message}}
 
 
-async def _handle(msg: dict, settings: Settings) -> dict | None:
+async def _handle(
+    msg: dict, settings: Settings, subscriptions: set[str] | None = None
+) -> dict | None:
     method = msg.get("method", "")
     msg_id = msg.get("id")
 
@@ -494,7 +502,7 @@ async def _handle(msg: dict, settings: Settings) -> dict | None:
             msg_id,
             {
                 "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {"tools": {}, "resources": {}},
+                "capabilities": {"tools": {}, "resources": {"subscribe": True}},
                 "serverInfo": {"name": "hearthia", "version": __version__},
             },
         )
@@ -504,14 +512,27 @@ async def _handle(msg: dict, settings: Settings) -> dict | None:
         return _resp(msg_id, {"tools": TOOLS})
     if method == "resources/list":
         return _resp(msg_id, {"resources": RESOURCES})
+    if method in {"resources/subscribe", "resources/unsubscribe"}:
+        params = msg.get("params") or {}
+        uri = str(params.get("uri", ""))
+        if uri not in _RESOURCE_FUNCS:
+            return _err(msg_id, -32602, f"unknown resource: {uri}")
+        if uri not in _SUBSCRIBABLE_RESOURCES:
+            return _err(msg_id, -32602, f"resource does not support subscriptions: {uri}")
+        if subscriptions is not None:
+            if method == "resources/subscribe":
+                subscriptions.add(uri)
+            else:
+                subscriptions.discard(uri)
+        return _resp(msg_id, {})
     if method == "resources/read":
         params = msg.get("params") or {}
         uri = str(params.get("uri", ""))
-        fn = _RESOURCE_FUNCS.get(uri)
-        if fn is None:
+        resource_fn = _RESOURCE_FUNCS.get(uri)
+        if resource_fn is None:
             return _err(msg_id, -32602, f"unknown resource: {uri}")
         try:
-            mime_type, text = await fn(settings)
+            mime_type, text = await resource_fn(settings)
         except Exception as exc:  # noqa: BLE001 — resource failures are results
             return _err(msg_id, -32603, f"resource read failed: {exc}")
         return _resp(
@@ -521,11 +542,11 @@ async def _handle(msg: dict, settings: Settings) -> dict | None:
     if method == "tools/call":
         params = msg.get("params") or {}
         name = str(params.get("name", ""))
-        fn = _TOOL_FUNCS.get(name)
-        if fn is None:
+        tool_fn = _TOOL_FUNCS.get(name)
+        if tool_fn is None:
             return _err(msg_id, -32602, f"unknown tool: {name}")
         try:
-            text = await fn(settings, params.get("arguments") or {})
+            text = await tool_fn(settings, params.get("arguments") or {})
             is_error = False
         except Exception as e:  # noqa: BLE001 — tool failures are results, not crashes
             text = f"error: {e}"
@@ -546,21 +567,99 @@ async def _read_stdin() -> asyncio.StreamReader:
     return reader
 
 
+def _resource_updated(uri: str) -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "method": "notifications/resources/updated",
+        "params": {"uri": uri},
+    }
+
+
+def _resource_change_key(uri: str, text: str) -> str:
+    if uri != "hearthia://status":
+        return text
+    try:
+        snapshot = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+    if isinstance(snapshot, dict):
+        snapshot.pop("time", None)
+    return json.dumps(snapshot, sort_keys=True)
+
+
+async def _watch_resource_subscriptions(
+    settings: Settings,
+    subscriptions: set[str],
+    outgoing: asyncio.Queue[dict | None],
+    stopped: asyncio.Event,
+) -> None:
+    """Notify subscribers when a status or health snapshot changes."""
+    previous: dict[str, str] = {}
+    while not stopped.is_set():
+        try:
+            await asyncio.wait_for(stopped.wait(), timeout=_RESOURCE_POLL_SECONDS)
+        except TimeoutError:
+            pass
+        if stopped.is_set():
+            break
+        for uri in tuple(subscriptions):
+            try:
+                _, text = await _RESOURCE_FUNCS[uri](settings)
+            except Exception:  # noqa: BLE001 — a transient daemon failure is not a change
+                continue
+            change_key = _resource_change_key(uri, text)
+            if uri in previous and previous[uri] != change_key:
+                await outgoing.put(_resource_updated(uri))
+            previous[uri] = change_key
+        for uri in set(previous) - subscriptions:
+            previous.pop(uri)
+
+
+async def _write_outgoing(outgoing: asyncio.Queue[dict | None]) -> None:
+    while True:
+        message = await outgoing.get()
+        if message is None:
+            return
+        sys.stdout.write(json.dumps(message, separators=(",", ":")) + "\n")
+        sys.stdout.flush()
+
+
 async def serve(settings: Settings | None = None) -> None:
     """Run the MCP server over stdio until stdin closes."""
     settings = settings or Settings()
     reader = await _read_stdin()
-    while True:
-        line = await reader.readline()
-        if not line:
-            break
-        try:
-            msg = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(msg, dict):
-            continue
-        reply = await _handle(msg, settings)
+    outgoing: asyncio.Queue[dict | None] = asyncio.Queue()
+    subscriptions: set[str] = set()
+    stopped = asyncio.Event()
+    writer = asyncio.create_task(_write_outgoing(outgoing))
+    watcher = asyncio.create_task(
+        _watch_resource_subscriptions(settings, subscriptions, outgoing, stopped)
+    )
+    requests: set[asyncio.Task[None]] = set()
+
+    async def answer(msg: dict) -> None:
+        reply = await _handle(msg, settings, subscriptions)
         if reply is not None:
-            sys.stdout.write(json.dumps(reply, separators=(",", ":")) + "\n")
-            sys.stdout.flush()
+            await outgoing.put(reply)
+
+    try:
+        while True:
+            line = await reader.readline()
+            if not line:
+                break
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(msg, dict):
+                continue
+            task = asyncio.create_task(answer(msg))
+            requests.add(task)
+            task.add_done_callback(requests.discard)
+        if requests:
+            await asyncio.gather(*requests, return_exceptions=True)
+    finally:
+        stopped.set()
+        await watcher
+        await outgoing.put(None)
+        await writer

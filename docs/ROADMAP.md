@@ -23,8 +23,8 @@ Updated: 2026-08-31. **Shipped in 0.4.0:**
   exported as Markdown (client-side, from the already-loaded `localStorage`
   transcript — no server-side storage exists to export from).
 - MCP now exposes point-in-time `hearthia://status`, `hearthia://health`, and
-  `hearthia://logs/recent` resources. Push subscriptions remain out of scope
-  until the stdio transport has a concurrent outbound notification design.
+  `hearthia://logs/recent` resources, plus health/status subscriptions with
+  `notifications/resources/updated` over the concurrent stdio transport.
 - The Playwright smoke script now covers all dashboard tabs, mobile chat drawer
   reachability, and the read-only TreePact surface without console errors.
 

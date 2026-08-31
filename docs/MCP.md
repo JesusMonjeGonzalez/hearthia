@@ -33,9 +33,10 @@ The server exposes read-only snapshots through `resources/list` and
 | `hearthia://health` | `application/json` | Gateway, event watcher, and crash-loop health flags |
 | `hearthia://logs/recent` | `text/plain` | A bounded snapshot of recent gateway log lines |
 
-These are point-in-time reads, not push subscriptions. The stdio transport
-currently answers one request at a time; an agent that needs to watch for a
-crash loop should read `hearthia://health` on an interval.
+All three resources support `resources/subscribe` and
+`resources/unsubscribe`. When a snapshot changes, the server sends
+`notifications/resources/updated` with the resource URI. The log subscription
+reports changes to bounded snapshots; it is not a durable event history.
 
 ## Client setup
 

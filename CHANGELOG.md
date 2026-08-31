@@ -13,6 +13,9 @@
 - Export the active chat conversation as Markdown (`Export .md` button in the
   chat sidebar) — purely client-side, since conversations only ever lived in
   `localStorage`.
+- MCP now exposes `resources/list` and `resources/read` for daemon status,
+  health, and bounded recent logs. All three resources support
+  `resources/subscribe` with `notifications/resources/updated` over stdio.
 
 ### Changed
 
