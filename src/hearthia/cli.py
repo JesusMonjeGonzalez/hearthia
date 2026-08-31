@@ -961,9 +961,7 @@ def loadout_cool_cmd(name: str = typer.Argument(..., help="Loadout name.")) -> N
     for mid in result["cooled"]:
         typer.echo(f"  cooled  {mid}")
     for item in result.get("preserved_shared", []):
-        typer.echo(
-            f"  kept    {item['model']} (shared with {', '.join(item['loadouts'])})"
-        )
+        typer.echo(f"  kept    {item['model']} (shared with {', '.join(item['loadouts'])})")
     for mid in result["failed"]:
         typer.echo(f"  FAILED  {mid}")
     if result["failed"]:

@@ -208,8 +208,7 @@ class BrainIndex:
             ).fetchall()
         except sqlite3.OperationalError as exc:
             raise RuntimeError(
-                "brain index is missing or has a stale schema; "
-                "run `hearth brain reindex`"
+                "brain index is missing or has a stale schema; run `hearth brain reindex`"
             ) from exc
         return [
             {

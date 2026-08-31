@@ -29,9 +29,7 @@ def _loadout_names(loadouts: Mapping[str, Any] | None, model_id: str) -> tuple[s
         return ()
     return tuple(
         sorted(
-            str(name)
-            for name, config in loadouts.items()
-            if model_id in _loadout_model_ids(config)
+            str(name) for name, config in loadouts.items() if model_id in _loadout_model_ids(config)
         )
     )
 

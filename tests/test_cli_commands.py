@@ -434,9 +434,7 @@ def test_est_json_is_parseable_and_reflects_fit(tmp_path, config_path):
 def test_est_json_nonzero_exit_when_it_does_not_fit(tmp_path, config_path, monkeypatch):
     monkeypatch.setattr("hearthia.budget.wired_limit_bytes", lambda total: 1)
     respx.get(f"{GW}/running").respond(200, json={"running": []})
-    result = runner.invoke(
-        app, ["est", "big-coder", "--json"], env=_env(tmp_path, config_path)
-    )
+    result = runner.invoke(app, ["est", "big-coder", "--json"], env=_env(tmp_path, config_path))
     assert result.exit_code == 1
     payload = json.loads(result.output)
     assert payload["fits"] is False
