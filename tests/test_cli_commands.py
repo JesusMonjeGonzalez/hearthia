@@ -1,3 +1,5 @@
+import json
+
 import respx
 from typer.testing import CliRunner
 
@@ -413,3 +415,42 @@ def test_advise_prints_options_when_blocked(tmp_path, config_path, monkeypatch):
     assert "does not fit" in result.output
     # either a change-set fits, or the honest answer is that none does
     assert any(word in result.output for word in ("ctx", "cool", "no simple change-set"))
+
+
+@respx.mock
+def test_est_json_is_parseable_and_reflects_fit(tmp_path, config_path):
+    respx.get(f"{GW}/running").respond(200, json={"running": []})
+    result = runner.invoke(
+        app, ["est", "big-coder", "tiny-embed", "--json"], env=_env(tmp_path, config_path)
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["fits"] is True
+    ids = {m["id"] for m in payload["models"]}
+    assert ids == {"big-coder", "tiny-embed"}
+
+
+@respx.mock
+def test_est_json_nonzero_exit_when_it_does_not_fit(tmp_path, config_path, monkeypatch):
+    monkeypatch.setattr("hearthia.budget.wired_limit_bytes", lambda total: 1)
+    respx.get(f"{GW}/running").respond(200, json={"running": []})
+    result = runner.invoke(
+        app, ["est", "big-coder", "--json"], env=_env(tmp_path, config_path)
+    )
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["fits"] is False
+
+
+@respx.mock
+def test_advise_json_is_parseable_with_serializable_options(tmp_path, config_path, monkeypatch):
+    monkeypatch.setattr("hearthia.budget.wired_limit_bytes", lambda total: 1)
+    respx.get(f"{GW}/running").respond(200, json={"running": []})
+    result = runner.invoke(
+        app, ["advise", "big-coder", "tiny-embed", "--json"], env=_env(tmp_path, config_path)
+    )
+    payload = json.loads(result.output)
+    assert payload["fits"] is False
+    assert payload["plan"] is None
+    for option in payload["options"]:
+        assert set(option) == {"kind", "label", "flags", "total_bytes", "lines"}

@@ -8,6 +8,8 @@
   into readable `metadata.loadout` fields while preserving model roles and YAML
   comments.
 - Model API responses and dashboard cards expose current loadout membership.
+- `hearth est --json` and `hearth advise --json` emit machine-readable output
+  for scripts, alongside the existing agent-facing text and MCP tools.
 
 ### Changed
 

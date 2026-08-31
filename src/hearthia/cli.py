@@ -634,6 +634,9 @@ def est(
     ctx: Annotated[
         int, typer.Option("--ctx", help="Override the context size for every model.")
     ] = 0,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable output for scripts.")
+    ] = False,
 ) -> None:
     """What-if: would these models fit in RAM together? Nothing is loaded."""
     s = Settings()
@@ -646,6 +649,13 @@ def est(
         psutil.virtual_memory().available,
         extra_ctx=ctx or None,
     )
+    if as_json:
+        import json
+
+        typer.echo(json.dumps(plan))
+        if not plan["fits"]:
+            raise typer.Exit(1)
+        return
     for m in plan["models"]:
         if "error" in m:
             typer.echo(f"  {m['id']:32} — {m['error']}")
@@ -675,6 +685,9 @@ def est(
 @app.command()
 def advise(
     model_ids: Annotated[list[str], typer.Argument(help="Model ids from the config.")],
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable output for scripts.")
+    ] = False,
 ) -> None:
     """Change-sets that make these models fit: KV quantisation, ctx, cooling."""
     s = Settings()
@@ -701,6 +714,25 @@ def advise(
             await gw.close()
 
     advice, plan = asyncio.run(run())
+    if as_json:
+        import dataclasses
+        import json
+
+        typer.echo(
+            json.dumps(
+                {
+                    "fits": advice["fits"],
+                    "total_bytes": advice["total_bytes"],
+                    "wired_limit": advice["wired_limit"],
+                    "ram_available": advice["ram_available"],
+                    "plan": plan if advice["fits"] else None,
+                    "options": [dataclasses.asdict(o) for o in advice["options"]],
+                }
+            )
+        )
+        if not advice["fits"] and not advice["options"]:
+            raise typer.Exit(1)
+        return
     if advice["fits"]:
         typer.echo("  the set fits as configured:")
         for line in _plan_lines(plan):

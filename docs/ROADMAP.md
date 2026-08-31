@@ -13,6 +13,8 @@ Updated: 2026-08-31. **Shipped in 0.4.0:**
 
 - Loadout membership is projected into registry metadata, exposed in the model
   API/dashboard, and shared models are preserved during loadout cooling.
+- `hearth est`/`hearth advise` accept `--json` for scriptable machine-readable
+  output.
 
 **Shipped in 0.3.2:**
 
@@ -49,13 +51,7 @@ logging, dashboard failure banners.
 
 ## Remaining P2
 
-### 1. Loadout lifecycle metadata
-`[loadouts]` is config.toml-side only; llama-swap never sees it. Optional:
-write `metadata.loadout = "coding"` into each member's block so the
-dashboard could badge loadout membership, and let `hearth loadout cool`
-release only members not shared with other active loadouts.
-
-### 2. MCP: expose daemon SSE as resources
+### 1. MCP: expose daemon SSE as resources
 Today the server answers point-in-time status. Exposing the event stream
 (and `logs/stream`) as MCP resources/subscriptions would let agents react to
 crash loops instead of polling.
@@ -67,8 +63,6 @@ crash loops instead of polling.
 - **Brain fallback path**: the non-sqlite-vec cosine fallback is a
   pure-Python loop over every chunk; batch it with numpy (spec §8) or drop
   the fallback — sqlite-vec is already a hard dependency. Decide and delete.
-- **`hearth est --json` / `advise --json`**: machine-readable output for
-  scripts (MCP already returns text designed for agents).
 - **Playwright smoke script** under `tests/e2e/` (not in pytest): boot the
   daemon against a mock gateway, click through the six tabs, assert no
   console errors. This caught the dead Chat tab — worth keeping runnable.
