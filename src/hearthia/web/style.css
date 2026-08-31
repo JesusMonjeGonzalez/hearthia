@@ -257,7 +257,18 @@ h2 { font: 600 13px var(--display); text-transform: uppercase; letter-spacing: 0
 .conv-item .del { background: none; border: none; color: var(--dim); font-size: 13px; padding: 0 2px; }
 .conv-item .del:hover { color: var(--danger); }
 .chat-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-@media (max-width: 760px) { .conv-list { display: none; } }
+#conv-toggle { display: none; }
+@media (max-width: 760px) {
+  .chat-wrap { position: relative; }
+  #conv-toggle { display: inline-block; }
+  .conv-list {
+    position: absolute; z-index: 20; top: 0; left: 0; bottom: 0; width: 220px;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    transform: translateX(-110%); transition: transform 0.2s ease;
+  }
+  .conv-list.open { transform: translateX(0); }
+}
 
 .sampling { position: relative; }
 .sampling summary { list-style: none; cursor: pointer; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }

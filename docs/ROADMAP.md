@@ -18,6 +18,10 @@ Updated: 2026-08-31. **Shipped in 0.4.0:**
 - Fixed `hearth brain search` always falling through to the slow
   pure-Python cosine loop instead of the sqlite-vec KNN index (vec0 rejects
   bound `LIMIT ?`; use `k = ?`), and removed that now-dead fallback path.
+- Chat: the conversation list is now reachable under 760px via a `#conv-toggle`
+  drawer instead of being permanently `display:none`, and conversations can be
+  exported as Markdown (client-side, from the already-loaded `localStorage`
+  transcript — no server-side storage exists to export from).
 
 **Shipped in 0.3.2:**
 
@@ -61,8 +65,6 @@ crash loops instead of polling.
 
 ## Remaining P3 — polish and hardening
 
-- **Chat**: the conversation list is `display:none` under 760px with no way
-  to open it; export conversation as Markdown.
 - **Playwright smoke script** under `tests/e2e/` (not in pytest): boot the
   daemon against a mock gateway, click through the six tabs, assert no
   console errors. This caught the dead Chat tab — worth keeping runnable.

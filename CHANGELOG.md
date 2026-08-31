@@ -10,6 +10,9 @@
 - Model API responses and dashboard cards expose current loadout membership.
 - `hearth est --json` and `hearth advise --json` emit machine-readable output
   for scripts, alongside the existing agent-facing text and MCP tools.
+- Export the active chat conversation as Markdown (`Export .md` button in the
+  chat sidebar) — purely client-side, since conversations only ever lived in
+  `localStorage`.
 
 ### Changed
 
@@ -24,6 +27,9 @@
   fell through. Fixed the query to use vec0's `k = ?` constraint and removed
   the now-unused fallback (it also masked schema drift — a stale/missing
   index now raises a clear error pointing at `hearth brain reindex`).
+- Chat: the conversation list was permanently `display:none` under 760px
+  with no way to reopen it (`#conv-new` was unreachable too, since it lived
+  inside the hidden sidebar). It's now a toggleable drawer (`#conv-toggle`).
 
 ## 0.4.0 — 2026-08-31
 

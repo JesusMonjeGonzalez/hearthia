@@ -52,6 +52,23 @@ def main() -> None:
         if page.locator(".conv-item").count() != before + 1:
             fail("chat module not wired — '#conv-new' created no conversation")
 
+        # narrow viewport: the conversation list must be reachable via the
+        # drawer toggle instead of permanently display:none (regression for
+        # the bug the roadmap flagged).
+        page.set_viewport_size({"width": 500, "height": 800})
+        page.wait_for_timeout(200)
+        if page.locator(".conv-list").is_visible():
+            fail("conv-list should start closed on narrow viewports")
+        page.click("#conv-toggle")
+        page.wait_for_timeout(200)
+        if not page.locator(".conv-list").is_visible():
+            fail("#conv-toggle did not open the conversation drawer")
+        page.click(".conv-item")
+        page.wait_for_timeout(200)
+        if page.locator(".conv-list").is_visible():
+            fail("selecting a conversation should close the drawer on narrow viewports")
+        page.set_viewport_size({"width": 1280, "height": 900})
+
         # TreePact panel must stay strictly read-only: no run/resume/cancel/
         # cleanup affordance should ever exist in the dashboard.
         page.click('.tab[data-tab="treepact"]')

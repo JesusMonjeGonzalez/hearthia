@@ -69,10 +69,12 @@
     <div class="chat-wrap">
       <aside class="conv-list">
         <button id="conv-new" class="btn" style="width:100%">New chat</button>
+        <button id="conv-export" class="btn btn-quiet" style="width:100%" title="Export this conversation as Markdown">Export .md</button>
         <div id="conv-items"></div>
       </aside>
       <div class="chat-main">
         <div class="chat-toolbar">
+          <button type="button" id="conv-toggle" class="btn btn-quiet" title="Conversations">☰</button>
           <select id="chat-model" title="Model for this conversation"></select>
           <input id="chat-system" type="text" placeholder="System prompt (optional)">
           <details class="sampling">

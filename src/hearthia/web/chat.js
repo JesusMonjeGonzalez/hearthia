@@ -42,6 +42,7 @@ function renderConvList() {
       saveConvs();
       renderConvList();
       renderConv();
+      $(".conv-list").classList.remove("open");
     });
     item.querySelector(".del").addEventListener("click", () => {
       convs = convs.filter((x) => x.id !== c.id);
@@ -109,6 +110,39 @@ function addMsg(role, content, reasoning, stats, injectedChunks) {
 }
 
 $("#conv-new").addEventListener("click", newConv);
+
+$("#conv-toggle").addEventListener("click", () => {
+  $(".conv-list").classList.toggle("open");
+});
+
+function markdownForConv(c) {
+  const lines = [`# ${c.title || "Untitled conversation"}`];
+  if (c.system) lines.push("", "**System prompt:**", "", c.system);
+  for (const m of c.messages) {
+    const label = m.role === "user" ? "User" : m.role === "assistant" ? "Assistant" : m.role;
+    lines.push("", "---", "", `**${label}:**`, "", m.content || "");
+  }
+  return lines.join("\n") + "\n";
+}
+
+function downloadText(filename, text) {
+  const blob = new Blob([text], { type: "text/markdown" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+$("#conv-export").addEventListener("click", () => {
+  const c = activeConv();
+  if (!c || !c.messages.length) return;
+  const safeName = (c.title || "conversation").replace(/[^a-z0-9-_ ]/gi, "_").trim() || "conversation";
+  downloadText(`${safeName}.md`, markdownForConv(c));
+});
 
 /* sampling settings + last model survive reloads */
 const LS_SAMPLING = "hearthia.sampling";
