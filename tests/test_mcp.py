@@ -2,6 +2,8 @@
 
 import json
 
+import respx
+
 import hearthia.mcp as mcp_module
 from hearthia.mcp import TOOLS, _handle
 from hearthia.settings import Settings
@@ -55,6 +57,7 @@ async def test_initialize_returns_protocol_and_server_info():
     assert reply["result"]["protocolVersion"] == "2025-06-18"
     assert reply["result"]["serverInfo"]["name"] == "hearthia"
     assert "tools" in reply["result"]["capabilities"]
+    assert "resources" in reply["result"]["capabilities"]
 
 
 async def test_notifications_are_not_answered():
@@ -63,7 +66,7 @@ async def test_notifications_are_not_answered():
 
 
 async def test_unknown_method_is_method_not_found():
-    reply = await _handle({"jsonrpc": "2.0", "id": 3, "method": "resources/list"}, Settings())
+    reply = await _handle({"jsonrpc": "2.0", "id": 3, "method": "unknown/method"}, Settings())
     assert reply["error"]["code"] == -32601
 
 
@@ -89,6 +92,107 @@ async def test_tools_list_schemas():
     for t in tools:
         assert t["description"]
         assert t["inputSchema"]["type"] == "object"
+
+
+async def test_resources_list_schemas():
+    reply = await _handle({"jsonrpc": "2.0", "id": 6, "method": "resources/list"}, Settings())
+    resources = reply["result"]["resources"]
+    assert {r["uri"] for r in resources} == {
+        "hearthia://status",
+        "hearthia://health",
+        "hearthia://logs/recent",
+    }
+    for resource in resources:
+        assert resource["name"]
+        assert resource["description"]
+        assert resource["mimeType"] in {"application/json", "text/plain"}
+
+
+@respx.mock
+async def test_resource_read_status_returns_daemon_snapshot(tmp_path):
+    settings = _settings(tmp_path)
+    expected = {"swap_up": True, "health": {"crash_loop": False}}
+    respx.get(f"{settings.daemon.url}/api/status").respond(200, json=expected)
+    reply = await _handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "resources/read",
+            "params": {"uri": "hearthia://status"},
+        },
+        settings,
+    )
+    content = reply["result"]["contents"][0]
+    assert content["uri"] == "hearthia://status"
+    assert content["mimeType"] == "application/json"
+    assert json.loads(content["text"]) == expected
+
+
+@respx.mock
+async def test_resource_read_health_returns_daemon_health(tmp_path):
+    settings = _settings(tmp_path)
+    expected = {"ok": False, "gateway": False, "events_connected": False, "crash_loop": True}
+    respx.get(f"{settings.daemon.url}/api/health").respond(200, json=expected)
+    reply = await _handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "resources/read",
+            "params": {"uri": "hearthia://health"},
+        },
+        settings,
+    )
+    assert json.loads(reply["result"]["contents"][0]["text"]) == expected
+
+
+@respx.mock
+async def test_resource_read_daemon_failure_is_internal_error(tmp_path):
+    settings = _settings(tmp_path)
+    respx.get(f"{settings.daemon.url}/api/health").respond(503)
+    reply = await _handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "resources/read",
+            "params": {"uri": "hearthia://health"},
+        },
+        settings,
+    )
+    assert reply["error"]["code"] == -32603
+    assert "resource read failed" in reply["error"]["message"]
+
+
+@respx.mock
+async def test_resource_read_recent_logs_is_bounded_text(tmp_path):
+    settings = _settings(tmp_path)
+    respx.get(f"{settings.daemon.url}/api/logs/stream").respond(
+        200, content=b"first log line\nsecond log line\n"
+    )
+    reply = await _handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "resources/read",
+            "params": {"uri": "hearthia://logs/recent"},
+        },
+        settings,
+    )
+    content = reply["result"]["contents"][0]
+    assert content["mimeType"] == "text/plain"
+    assert content["text"] == "first log line\nsecond log line\n"
+
+
+async def test_resource_read_unknown_uri_is_invalid_params():
+    reply = await _handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "resources/read",
+            "params": {"uri": "hearthia://missing"},
+        },
+        Settings(),
+    )
+    assert reply["error"]["code"] == -32602
 
 
 async def test_unknown_tool_is_invalid_params():

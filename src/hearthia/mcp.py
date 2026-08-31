@@ -149,6 +149,28 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
+RESOURCES: list[dict[str, Any]] = [
+    {
+        "uri": "hearthia://status",
+        "name": "Hearthia status",
+        "description": "Point-in-time daemon status, running models, health, and system budget.",
+        "mimeType": "application/json",
+    },
+    {
+        "uri": "hearthia://health",
+        "name": "Hearthia health",
+        "description": "Point-in-time gateway, event watcher, and crash-loop health checks.",
+        "mimeType": "application/json",
+    },
+    {
+        "uri": "hearthia://logs/recent",
+        "name": "Recent Hearthia logs",
+        "description": "A bounded snapshot of the most recent gateway log lines.",
+        "mimeType": "text/plain",
+    },
+]
+
+
 # ── tool implementations ─────────────────────────────────────────────────────
 
 
@@ -162,6 +184,52 @@ def _reg(s: Settings) -> Registry:
 
 async def _gw_for(s: Settings) -> Gateway:
     return Gateway(s.gateway.url)
+
+
+async def _daemon_json(s: Settings, path: str) -> dict[str, Any]:
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        response = await client.get(f"{s.daemon.url}{path}")
+        response.raise_for_status()
+        return response.json()
+
+
+async def _resource_status(s: Settings) -> tuple[str, str]:
+    payload = await _daemon_json(s, "/api/status")
+    return "application/json", json.dumps(payload)
+
+
+async def _resource_health(s: Settings) -> tuple[str, str]:
+    payload = await _daemon_json(s, "/api/health")
+    return "application/json", json.dumps(payload)
+
+
+async def _resource_logs(s: Settings) -> tuple[str, str]:
+    lines: list[str] = []
+    size = 0
+    timeout = httpx.Timeout(1.5, connect=5.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream("GET", f"{s.daemon.url}/api/logs/stream") as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    encoded_size = len(line.encode()) + 1
+                    if lines and size + encoded_size > 32 * 1024:
+                        break
+                    lines.append(line)
+                    size += encoded_size
+                    if len(lines) >= 200:
+                        break
+    except httpx.HTTPError:
+        if not lines:
+            raise
+    return "text/plain", "\n".join(lines) + ("\n" if lines else "(no recent logs)\n")
+
+
+_RESOURCE_FUNCS = {
+    "hearthia://status": _resource_status,
+    "hearthia://health": _resource_health,
+    "hearthia://logs/recent": _resource_logs,
+}
 
 
 async def _tool_status(s: Settings, args: dict) -> str:
@@ -426,7 +494,7 @@ async def _handle(msg: dict, settings: Settings) -> dict | None:
             msg_id,
             {
                 "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {"tools": {}},
+                "capabilities": {"tools": {}, "resources": {}},
                 "serverInfo": {"name": "hearthia", "version": __version__},
             },
         )
@@ -434,6 +502,22 @@ async def _handle(msg: dict, settings: Settings) -> dict | None:
         return _resp(msg_id, {})
     if method == "tools/list":
         return _resp(msg_id, {"tools": TOOLS})
+    if method == "resources/list":
+        return _resp(msg_id, {"resources": RESOURCES})
+    if method == "resources/read":
+        params = msg.get("params") or {}
+        uri = str(params.get("uri", ""))
+        fn = _RESOURCE_FUNCS.get(uri)
+        if fn is None:
+            return _err(msg_id, -32602, f"unknown resource: {uri}")
+        try:
+            mime_type, text = await fn(settings)
+        except Exception as exc:  # noqa: BLE001 — resource failures are results
+            return _err(msg_id, -32603, f"resource read failed: {exc}")
+        return _resp(
+            msg_id,
+            {"contents": [{"uri": uri, "mimeType": mime_type, "text": text}]},
+        )
     if method == "tools/call":
         params = msg.get("params") or {}
         name = str(params.get("name", ""))

@@ -22,6 +22,21 @@ standard library only — `uvx` not required at call time, no extra packages.
 | `hearthia_loadout` | Warm a named `[loadouts]` set; `name: "__list__"` lists them |
 | `hearthia_brain_search` | Semantic search over the Obsidian vault |
 
+## Resources
+
+The server exposes read-only snapshots through `resources/list` and
+`resources/read`:
+
+| URI | MIME type | What it contains |
+|---|---|---|
+| `hearthia://status` | `application/json` | Daemon status, running models, health, and system budget |
+| `hearthia://health` | `application/json` | Gateway, event watcher, and crash-loop health flags |
+| `hearthia://logs/recent` | `text/plain` | A bounded snapshot of recent gateway log lines |
+
+These are point-in-time reads, not push subscriptions. The stdio transport
+currently answers one request at a time; an agent that needs to watch for a
+crash loop should read `hearthia://health` on an interval.
+
 ## Client setup
 
 The server command is the Hearthia CLI itself:

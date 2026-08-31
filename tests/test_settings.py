@@ -12,6 +12,7 @@ def test_defaults_without_config_file(monkeypatch, tmp_path):
     assert s.gateway.url == "http://127.0.0.1:9292"
     assert s.daemon.port == 9300
     assert s.daemon.bind == "127.0.0.1"
+    assert s.daemon.url == "http://127.0.0.1:9300"
     assert s.brain.vault is None
     assert s.treepact.executable is None
     assert s.treepact.expected_version == "0.2.0"
@@ -61,4 +62,7 @@ def test_daemon_rejects_non_loopback_bind(monkeypatch, bind):
 @pytest.mark.parametrize("bind", ["127.0.0.1", "::1"])
 def test_daemon_accepts_loopback_bind(monkeypatch, bind):
     monkeypatch.setenv("HEARTHIA_DAEMON__BIND", bind)
-    assert Settings().daemon.bind == bind
+    settings = Settings()
+    assert settings.daemon.bind == bind
+    expected_host = f"[{bind}]" if ":" in bind else bind
+    assert settings.daemon.url == f"http://{expected_host}:9300"

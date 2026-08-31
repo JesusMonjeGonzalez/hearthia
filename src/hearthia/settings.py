@@ -61,6 +61,11 @@ class DaemonSettings(BaseModel):
             raise ValueError("daemon.bind must be a loopback IP address")
         return self
 
+    @property
+    def url(self) -> str:
+        host = f"[{self.bind}]" if ":" in self.bind else self.bind
+        return f"http://{host}:{self.port}"
+
 
 class BrainSettings(BaseModel):
     vault: Path | None = None

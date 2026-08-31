@@ -22,6 +22,11 @@ Updated: 2026-08-31. **Shipped in 0.4.0:**
   drawer instead of being permanently `display:none`, and conversations can be
   exported as Markdown (client-side, from the already-loaded `localStorage`
   transcript — no server-side storage exists to export from).
+- MCP now exposes point-in-time `hearthia://status`, `hearthia://health`, and
+  `hearthia://logs/recent` resources. Push subscriptions remain out of scope
+  until the stdio transport has a concurrent outbound notification design.
+- The Playwright smoke script now covers all dashboard tabs, mobile chat drawer
+  reachability, and the read-only TreePact surface without console errors.
 
 **Shipped in 0.3.2:**
 
@@ -58,16 +63,11 @@ logging, dashboard failure banners.
 
 ## Remaining P2
 
-### 1. MCP: expose daemon SSE as resources
-Today the server answers point-in-time status. Exposing the event stream
-(and `logs/stream`) as MCP resources/subscriptions would let agents react to
-crash loops instead of polling.
+No P2 items currently remain.
 
 ## Remaining P3 — polish and hardening
 
-- **Playwright smoke script** under `tests/e2e/` (not in pytest): boot the
-  daemon against a mock gateway, click through the six tabs, assert no
-  console errors. This caught the dead Chat tab — worth keeping runnable.
+No P3 items currently remain.
 
 ## Explicitly out (per spec §13 / current decision)
 
