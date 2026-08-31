@@ -4,7 +4,7 @@ import io
 import os
 import re
 import shutil
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -79,6 +79,7 @@ class Registry:
             meta = mcfg.get("metadata") or {}
             model_id = str(mid)
             configured_loadouts = _loadout_names(loadouts, model_id)
+            model_loadouts: tuple[str, ...]
             if loadouts is None:
                 raw_loadouts = meta.get("loadout")
                 if isinstance(raw_loadouts, str):
@@ -133,7 +134,7 @@ class Registry:
 
         changed: list[str] = []
         for model_id, block in models.items():
-            if not isinstance(block, Mapping):
+            if not isinstance(block, MutableMapping):
                 raise ValueError(f"model '{model_id}' has invalid YAML block")
             names = sorted(set(memberships.get(str(model_id), [])))
             metadata = block.get("metadata")
@@ -141,7 +142,7 @@ class Registry:
                 metadata = {}
                 if names:
                     block["metadata"] = metadata
-            elif not isinstance(metadata, Mapping):
+            elif not isinstance(metadata, MutableMapping):
                 raise ValueError(f"model '{model_id}' has invalid metadata")
 
             desired = names[0] if len(names) == 1 else names
