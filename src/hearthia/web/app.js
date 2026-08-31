@@ -5,6 +5,7 @@ import { brainStatus } from "./brain.js";
 import { refreshFiles, refreshDownloads } from "./library.js";
 import { loadConfig } from "./config.js";
 import { startLogs } from "./logs.js";
+import { startTreePactPolling, stopTreePactPolling } from "./treepact.js";
 import "./chat.js"; // side-effect module: wires the whole Chat tab
 
 /* ── tabs ── */
@@ -22,6 +23,11 @@ document.querySelectorAll(".tab").forEach((t) =>
       refreshDownloads();
     }
     if (t.dataset.tab === "brain") brainStatus();
+    if (t.dataset.tab === "treepact") {
+      startTreePactPolling();
+    } else {
+      stopTreePactPolling();
+    }
   }),
 );
 

@@ -15,7 +15,7 @@ import urllib.request
 from playwright.sync_api import sync_playwright
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:9300"
-TABS = ["models", "chat", "brain", "library", "config", "logs"]
+TABS = ["models", "chat", "brain", "library", "config", "logs", "treepact"]
 
 
 def fail(msg: str) -> None:
@@ -51,6 +51,18 @@ def main() -> None:
         page.wait_for_timeout(200)
         if page.locator(".conv-item").count() != before + 1:
             fail("chat module not wired — '#conv-new' created no conversation")
+
+        # TreePact panel must stay strictly read-only: no run/resume/cancel/
+        # cleanup affordance should ever exist in the dashboard.
+        page.click('.tab[data-tab="treepact"]')
+        page.wait_for_timeout(500)
+        mutable = page.locator(
+            "#tab-treepact button:not(#treepact-refresh):not(.treepact-row), "
+            "#tab-treepact [data-action='run'], #tab-treepact [data-action='resume'], "
+            "#tab-treepact [data-action='cancel'], #tab-treepact [data-action='cleanup']"
+        ).count()
+        if mutable:
+            fail(f"TreePact panel exposes {mutable} unexpected control(s) beyond Refresh")
 
         if errors:
             fail(f"console errors: {errors}")

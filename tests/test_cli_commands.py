@@ -199,6 +199,82 @@ def test_mcp_command_exists():
     assert "mcp" in result.output.lower()
 
 
+def test_treepact_commands_exist():
+    result = runner.invoke(app, ["treepact", "--help"])
+    assert result.exit_code == 0
+    assert "doctor" in result.output
+    assert "validate" in result.output
+    assert "run" in result.output
+    assert "status" in result.output
+    assert "diff" in result.output
+    assert "evidence" in result.output
+    assert "verify" in result.output
+
+
+def test_treepact_exit_code_is_propagated(monkeypatch, tmp_path):
+    import hearthia.cli as cli
+
+    class FakeBridge:
+        def validate(self, repo):
+            return 16
+
+    monkeypatch.setattr(cli.TreePactBridge, "from_settings", lambda settings: FakeBridge())
+    result = runner.invoke(app, ["treepact", "validate", "--repo", str(tmp_path)])
+    assert result.exit_code == 16
+
+
+def test_treepact_run_requires_budgeted_loadout(monkeypatch, tmp_path):
+    import hearthia.cli as cli
+
+    class FakeBridge:
+        def verify_version(self):
+            return None
+
+        def run(self, *args, **kwargs):
+            raise AssertionError("run must not start without a loadout")
+
+    monkeypatch.setattr(cli.TreePactBridge, "from_settings", lambda settings: FakeBridge())
+    result = runner.invoke(
+        app,
+        ["treepact", "run", "fix tests", "--repo", str(tmp_path), "--mode", "repair"],
+        env=_env(tmp_path, tmp_path / "stack" / "llama-swap.yaml"),
+    )
+    assert result.exit_code == 1
+    assert "require [treepact].loadout" in result.output
+
+
+def test_treepact_run_prepares_loadout_before_bridge(monkeypatch, tmp_path):
+    import hearthia.cli as cli
+
+    events = []
+
+    class FakeBridge:
+        def verify_version(self):
+            events.append("version")
+
+        def run(self, *args, **kwargs):
+            events.append("run")
+            return 0
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[treepact]\nloadout = "coding"\n')
+    monkeypatch.setattr(cli.TreePactBridge, "from_settings", lambda settings: FakeBridge())
+    monkeypatch.setattr(
+        cli,
+        "_prepare_treepact_loadout",
+        lambda settings: events.append(f"loadout:{settings.treepact.loadout}"),
+    )
+
+    result = runner.invoke(
+        app,
+        ["treepact", "run", "fix tests", "--repo", str(tmp_path), "--mode", "repair"],
+        env={"HEARTHIA_CONFIG": str(cfg)},
+    )
+
+    assert result.exit_code == 0
+    assert events == ["version", "loadout:coding", "run"]
+
+
 def test_gguf_reports_cost_for_a_header_file(tmp_path):
     """hearth gguf prices a bare .gguf from its header — no config, no gateway."""
     import struct

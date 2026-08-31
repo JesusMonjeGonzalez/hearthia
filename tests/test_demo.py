@@ -21,6 +21,15 @@ async def test_demo_status_is_flagged(tmp_path):
     await app.state.gateway.close()
 
 
+async def test_demo_does_not_expose_treepact_review(tmp_path):
+    """The demo never touches a real TreePact installation or a real user's runs."""
+    app = create_demo_app(demo_dir=tmp_path)
+    async with await _client(app) as client:
+        r = await client.get("/api/treepact/runs")
+    assert r.status_code == 404
+    await app.state.gateway.close()
+
+
 async def test_demo_models_listed(tmp_path):
     app = create_demo_app(demo_dir=tmp_path)
     async with await _client(app) as client:

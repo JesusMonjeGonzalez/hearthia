@@ -1,6 +1,7 @@
 """hearth — the Hearthia command line."""
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
 
@@ -12,12 +13,20 @@ from hearthia import __version__
 from hearthia.budget import WarmDecision, plan_warm_now
 from hearthia.demo import DEMO_PORT
 from hearthia.gateway import Gateway
+from hearthia.loadouts import loadout_load
 from hearthia.registry import Registry
 from hearthia.settings import Settings
+from hearthia.treepact import TreePactBridge, TreePactBridgeError
 
 DEFAULT_OLLAMA_DIR = Path.home() / ".ollama"
 
 app = typer.Typer(name="hearth", help="Hearthia — control plane for local models.")
+treepact_app = typer.Typer(
+    name="treepact",
+    help="Run coding-agent tasks under TreePact's independent evidence gates.",
+    no_args_is_help=True,
+)
+app.add_typer(treepact_app, name="treepact")
 
 STATE_WORDS = {"ready": "warm", "starting": "kindling", "stopping": "cooling"}
 
@@ -41,6 +50,157 @@ def main() -> None:
 def version() -> None:
     """Print the Hearthia version."""
     typer.echo(f"Hearthia {__version__}")
+
+
+def _prepare_treepact_loadout(settings: Settings) -> None:
+    name = settings.treepact.loadout
+    if not name:
+        raise TreePactBridgeError(
+            "integrated runs require [treepact].loadout so Hearthia can enforce the memory budget"
+        )
+
+    async def load() -> dict:
+        gateway = Gateway(settings.gateway.url)
+        try:
+            return await loadout_load(settings, gateway, _registry(settings), name)
+        finally:
+            await gateway.close()
+
+    result = asyncio.run(load())
+    if not result.get("ok"):
+        detail = str(result.get("error") or result.get("refused"))
+        advice = result.get("advice") or {}
+        labels = [option.label for option in (advice.get("options") or [])[:3]]
+        if labels:
+            detail += "\noptions that fit:\n" + "\n".join(f"  - {label}" for label in labels)
+        detail += "\nnothing was loaded"
+        raise TreePactBridgeError(detail)
+    warmed = ", ".join(result.get("warmed", []))
+    skipped = ", ".join(result.get("skipped", []))
+    if warmed:
+        typer.echo(f"treepact loadout warmed: {warmed}")
+    if skipped:
+        typer.echo(f"treepact loadout already warm: {skipped}")
+
+
+def _run_treepact(
+    action: Callable[[TreePactBridge], int], *, require_loadout: bool = False
+) -> None:
+    try:
+        settings = Settings()
+        bridge = TreePactBridge.from_settings(settings.treepact)
+        if require_loadout:
+            bridge.verify_version()
+            _prepare_treepact_loadout(settings)
+        exit_code = action(bridge)
+    except TreePactBridgeError as exc:
+        typer.echo(f"treepact integration unavailable: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    if exit_code:
+        raise typer.Exit(exit_code)
+
+
+@treepact_app.command("doctor")
+def treepact_doctor(
+    repo: Annotated[Path | None, typer.Option("--repo", help="Repository to diagnose.")] = None,
+    deep: Annotated[
+        bool, typer.Option("--deep", help="Run safe loopback and filesystem diagnostics.")
+    ] = False,
+) -> None:
+    """Check the compatible TreePact installation and its local dependencies."""
+    _run_treepact(lambda bridge: bridge.doctor(repo, deep=deep))
+
+
+@treepact_app.command("validate")
+def treepact_validate(
+    repo: Annotated[
+        Path | None, typer.Option("--repo", help="Repository containing .treepact.yaml.")
+    ] = None,
+) -> None:
+    """Validate a repository's Pact using TreePact."""
+    _run_treepact(lambda bridge: bridge.validate(repo or Path.cwd()))
+
+
+@treepact_app.command("status")
+def treepact_status(
+    run_id: Annotated[str, typer.Argument(help="TreePact run ID.")],
+) -> None:
+    """Show one run's state and gate summary."""
+    _run_treepact(lambda bridge: bridge.status(run_id))
+
+
+@treepact_app.command("diff")
+def treepact_diff(
+    run_id: Annotated[str, typer.Argument(help="TreePact run ID.")],
+    stat: Annotated[bool, typer.Option("--stat", help="Show only the diff summary.")] = False,
+    name_only: Annotated[
+        bool, typer.Option("--name-only", help="Show only changed paths.")
+    ] = False,
+) -> None:
+    """Inspect the independently captured patch without exporting it."""
+    _run_treepact(lambda bridge: bridge.diff(run_id, stat=stat, name_only=name_only))
+
+
+@treepact_app.command("evidence")
+def treepact_evidence(
+    run_id: Annotated[str, typer.Argument(help="TreePact run ID.")],
+    output_format: Annotated[
+        str, typer.Option("--format", help="summary, json or markdown.")
+    ] = "summary",
+    verify_hashes: Annotated[
+        bool, typer.Option("--verify-hashes", help="Recalculate evidence hashes.")
+    ] = False,
+) -> None:
+    """Read a decision bundle without copying it into Hearthia."""
+    _run_treepact(
+        lambda bridge: bridge.evidence(
+            run_id, output_format=output_format, verify_hashes=verify_hashes
+        )
+    )
+
+
+@treepact_app.command("verify")
+def treepact_verify(
+    run_id: Annotated[str, typer.Argument(help="TreePact run ID.")],
+    check_artifacts: Annotated[
+        bool,
+        typer.Option("--check-artifacts/--skip-artifacts", help="Verify artifact digests."),
+    ] = True,
+    check_events: Annotated[
+        bool, typer.Option("--check-events/--skip-events", help="Verify event-chain hashes.")
+    ] = True,
+) -> None:
+    """Verify artifact and event-chain integrity through TreePact."""
+    _run_treepact(
+        lambda bridge: bridge.verify(
+            run_id, check_artifacts=check_artifacts, check_events=check_events
+        )
+    )
+
+
+@treepact_app.command("run")
+def treepact_run(
+    task: Annotated[str, typer.Argument(help="Task to execute in TreePact's isolated worktree.")],
+    repo: Annotated[
+        Path | None, typer.Option("--repo", help="Repository containing .treepact.yaml.")
+    ] = None,
+    mode: Annotated[str, typer.Option("--mode", help="observe or repair.")] = "observe",
+    model_profile: Annotated[str | None, typer.Option("--model-profile")] = None,
+    max_attempts: Annotated[int | None, typer.Option("--max-attempts", min=1, max=3)] = None,
+    max_minutes: Annotated[int | None, typer.Option("--max-minutes", min=1)] = None,
+) -> None:
+    """Start one human-authorized TreePact run with the native local runtime."""
+    _run_treepact(
+        lambda bridge: bridge.run(
+            repo or Path.cwd(),
+            task,
+            mode=mode,
+            model_profile=model_profile,
+            max_attempts=max_attempts,
+            max_minutes=max_minutes,
+        ),
+        require_loadout=True,
+    )
 
 
 @app.command()
@@ -148,7 +308,7 @@ def purge() -> None:
         subprocess.run(["sudo", "purge"], check=True)
     except subprocess.CalledProcessError as e:
         typer.echo(f"purge failed (exit {e.returncode})")
-        raise typer.Exit(e.returncode)
+        raise typer.Exit(e.returncode) from e
     typer.echo("purged inactive file cache pages")
 
 

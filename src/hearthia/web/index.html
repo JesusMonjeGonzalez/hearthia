@@ -56,6 +56,7 @@
     <button class="tab" data-tab="library">Library</button>
     <button class="tab" data-tab="config">Config</button>
     <button class="tab" data-tab="logs">Logs</button>
+    <button class="tab" data-tab="treepact">TreePact</button>
   </nav>
 </header>
 
@@ -152,6 +153,23 @@
       <button id="logs-clear" class="btn btn-quiet">Clear view</button>
     </div>
     <pre id="log-view"></pre>
+  </section>
+
+  <section id="tab-treepact" class="panel">
+    <div class="treepact-toolbar">
+      <span class="hint">Read-only. TreePact is the sole authority for runs, gates and evidence — this view cannot start, resume, cancel or clean up anything.</span>
+      <button id="treepact-refresh" class="btn btn-quiet">Refresh</button>
+    </div>
+    <div class="treepact-grid">
+      <div>
+        <h2>Runs</h2>
+        <div id="treepact-runs"><div class="empty">Loading…</div></div>
+      </div>
+      <div>
+        <h2>Detail</h2>
+        <div id="treepact-detail"><div class="empty">Select a run.</div></div>
+      </div>
+    </div>
   </section>
 </main>
 

@@ -23,6 +23,39 @@ indexes, logs or credentials.
 - Brain filing constrains the model-chosen folder to the configured
   `[brain].folders` list and sanitises the title, so model output cannot
   traverse paths when a note is written.
+- `hearth treepact` delegates only `doctor`, `validate` and human-authorized
+  `run` operations to a separately installed, version-pinned TreePact CLI. It
+  uses a fixed argument vector without a shell and does not ingest TreePact
+  tasks, diffs or evidence.
+- Integrated TreePact runs require a named Hearthia loadout. Its declared model
+  set is checked and warmed under the unified-memory budget before TreePact is
+  invoked; a missing or refused loadout fails closed. The operator must keep
+  that declaration aligned with TreePact's selected provider profile.
+- TreePact run, resume and cleanup operations are not exposed through MCP. An
+  accepted TreePact decision is evidence of Pact conformance, not proof of
+  correctness or authorization to merge or publish.
+- TreePact CLI review commands (`status`, `diff`, `evidence`, `verify`) are
+  transparent subprocess views. Hearthia does not parse their output, open
+  TreePact SQLite or offer export paths that would duplicate restricted
+  artifacts.
+- The dashboard's TreePact tab and `GET /api/treepact/runs[/{run_id}]` are
+  read-only and use only TreePact's dedicated `review` contract: a
+  version-pinned subprocess with an allowlisted environment (no inherited
+  secrets or agent sockets), a five-second timeout, a one-megabyte output
+  ceiling, and validation of `schema`/`schema_version` before use. On
+  TreePact's side, `review` opens SQLite `mode=ro` with `query_only` and never
+  migrates, discovers runs, recalculates gates, generates a bundle or writes
+  to disk. The response is discarded after rendering; nothing is cached to a
+  second store. These routes are absent from `hearth demo`.
+- Each `treepact review` subprocess runs in a worker thread
+  (`asyncio.to_thread`), never on the daemon's event loop, and at most two run
+  concurrently (a shared semaphore). Without this, a slow or hung TreePact
+  process would stall every other route — chat, warm/cool, logs — and an
+  unbounded burst of dashboard polls could spawn unlimited `treepact`
+  processes.
+- The TreePact projection excludes task text, repository and worktree paths,
+  artifact content, prompts, provider payloads, logs and diffs; the dashboard
+  renders every value with `textContent`, never as HTML or Markdown.
 
 ## Reporting
 

@@ -41,5 +41,22 @@ def test_detect_paths_finds_home_and_absolute(tmp_path):
     assert any(p.endswith("/proyecto") for p in found)
 
 
+def test_detect_paths_finds_existing_unquoted_path_with_spaces(tmp_path):
+    project = tmp_path / "Application Support" / "TreePact" / "worktree"
+    project.mkdir(parents=True)
+
+    found = detect_paths(f"explica el proyecto en {project} por favor")
+
+    assert str(project) in found
+
+
+def test_detect_paths_finds_quoted_nonexistent_path_with_spaces(tmp_path):
+    project = tmp_path / "Future Projects" / "new repo"
+
+    found = detect_paths(f'revisa "{project}" cuando exista')
+
+    assert str(project) in found
+
+
 def test_detect_paths_ignores_plain_words():
     assert detect_paths("hola, ¿qué tal el día?") == []

@@ -31,6 +31,14 @@ def test_create_app_has_routers(config_path, backups_dir):
     assert "/api/chat" in paths
     assert "/api/logs/stream" in paths
     assert "/api/metrics" in paths
+    assert "/api/treepact/runs" in paths
+    assert "/api/treepact/runs/{run_id}" in paths
+    treepact_methods = {
+        method
+        for path in ("/api/treepact/runs", "/api/treepact/runs/{run_id}")
+        for method in schema["paths"][path]
+    }
+    assert treepact_methods == {"get"}
 
 
 def test_create_app_state_has_deps(config_path, backups_dir):

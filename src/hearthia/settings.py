@@ -98,6 +98,14 @@ class MemorySettings(BaseModel):
         return self
 
 
+class TreePactSettings(BaseModel):
+    """Compatibility contract for the separately installed TreePact CLI."""
+
+    executable: Path | None = None
+    expected_version: str = "0.1.0"
+    loadout: str | None = None
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="HEARTHIA_",
@@ -109,6 +117,7 @@ class Settings(BaseSettings):
     daemon: DaemonSettings = DaemonSettings()
     brain: BrainSettings = BrainSettings()
     memory: MemorySettings = MemorySettings()
+    treepact: TreePactSettings = TreePactSettings()
     loadouts: dict[str, LoadoutSettings] = {}
     lifecycle: dict[str, str] = {}
 

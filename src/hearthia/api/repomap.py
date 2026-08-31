@@ -18,14 +18,40 @@ _MANIFESTS = {"pyproject.toml", "package.json", "Cargo.toml", "go.mod", "Makefil
 # root str -> (signature, rendered map)
 _cache: dict[str, tuple[tuple, str]] = {}
 
-_PATH_RE = re.compile(r"(?:^|[\s'\"(¿¡])((?:~|/[\w.@-]+)(?:/[\w.@-]+)+/?)")
+_PATH_RE = re.compile(r"(?:^|[\s(¿¡])((?:~|/[\w.@-]+)(?:/[\w.@-]+)+/?)")
+_QUOTED_PATH_RE = re.compile(r"(['\"])((?:~|/)[^'\"\r\n]+)\1")
+_PATH_END_RE = re.compile(r"[,;:!?\n\r\t<>|]")
+
+
+def _clean_path(raw: str) -> str:
+    return raw.rstrip(".,;:!?").rstrip("/")
+
+
+def _longest_existing_path(text: str, match: re.Match[str]) -> str:
+    """Extend an unquoted path through spaces only when that prefix exists."""
+    stop = _PATH_END_RE.search(text, match.end(1))
+    end = stop.start() if stop else len(text)
+    words = text[match.start(1) : end].split()
+    for count in range(len(words), 1, -1):
+        candidate = _clean_path(" ".join(words[:count]))
+        if Path(candidate).expanduser().exists():
+            return candidate
+    return _clean_path(match.group(1))
 
 
 def detect_paths(text: str) -> list[str]:
     """Filesystem paths mentioned in a message (absolute or ~/), deduped."""
     found: list[str] = []
+    quoted_ranges: list[tuple[int, int]] = []
+    for match in _QUOTED_PATH_RE.finditer(text):
+        quoted_ranges.append(match.span())
+        expanded = str(Path(_clean_path(match.group(2))).expanduser())
+        if expanded not in found:
+            found.append(expanded)
     for m in _PATH_RE.finditer(text):
-        raw = m.group(1).rstrip(".,;:!?").rstrip("/")
+        if any(start <= m.start(1) < end for start, end in quoted_ranges):
+            continue
+        raw = _longest_existing_path(text, m)
         expanded = str(Path(raw).expanduser())
         if expanded not in found:
             found.append(expanded)

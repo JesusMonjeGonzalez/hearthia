@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **TreePact facade** (`hearth treepact doctor|validate|run`): a human-operated,
+  version-pinned subprocess bridge to TreePact's independent worktree, gate and
+  evidence engine. TreePact mutations are intentionally not exposed through
+  Hearthia MCP.
+- Integrated TreePact runs require a named Hearthia loadout and warm it through
+  the GGUF-derived memory gate before the governed run starts.
+- Bounded TreePact review commands (`status`, `diff`, `evidence`, `verify`)
+  preserve the independent CLI's output and exit codes without opening its
+  database or copying artifacts into Hearthia.
+- **Read-only TreePact dashboard panel and API** (`GET /api/treepact/runs`,
+  `GET /api/treepact/runs/{run_id}`): backed by TreePact's own strict,
+  versioned `review` contract via a version-pinned, environment-minimized,
+  timeout-bounded subprocess. Excludes task text, paths, artifact content,
+  prompts, provider payloads, logs and diffs; renders everything as text.
+  Absent from `hearth demo`. Each subprocess runs off the event loop
+  (`asyncio.to_thread`) with at most two in flight at once, so it cannot
+  stall the rest of the daemon or be used to spawn unbounded processes.
+
 ## 0.3.2 — 2026-08-28
 
 ### Changed

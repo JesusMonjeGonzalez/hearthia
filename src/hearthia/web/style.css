@@ -416,3 +416,25 @@ details.reasoning .rbody { color: var(--dim); font-size: 12.5px; white-space: pr
   white-space: pre-wrap;
   cursor: help;
 }
+
+/* ── treepact (read-only) ── */
+.treepact-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; }
+.treepact-toolbar .hint { flex: 1; }
+.treepact-grid { display: grid; grid-template-columns: 1fr 1.4fr; gap: 26px; align-items: start; }
+@media (max-width: 860px) { .treepact-grid { grid-template-columns: 1fr; } }
+.treepact-row {
+  width: 100%; text-align: left; cursor: pointer; font: 12px var(--mono);
+  justify-content: space-between;
+}
+.treepact-row.selected { border-color: var(--amber-dim); background: var(--panel-2); }
+.treepact-detail-card dl {
+  display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0 0 14px;
+}
+.treepact-detail-card dt { color: var(--dim); font: 11px var(--mono); text-transform: uppercase; letter-spacing: 0.08em; }
+.treepact-detail-card dd { margin: 0; font: 13px var(--mono); word-break: break-all; }
+.treepact-detail-card h3 { margin: 14px 0 8px; font: 600 13px var(--display); }
+.treepact-gate, .treepact-artifact {
+  display: flex; align-items: center; gap: 8px; font: 12px var(--mono);
+  padding: 6px 0; border-bottom: 1px solid var(--line);
+}
+.treepact-gate:last-child, .treepact-artifact:last-child { border-bottom: none; }

@@ -113,12 +113,19 @@ uv run scripts/benchmark.py
 ## What It Includes
 
 - **`hearth` CLI:** status, warm/cool (budget-checked), downloads, service control, logs and diagnostics.
-- **Dashboard:** model cards, memory map, TTL state, streaming chat, library, config and logs.
+- **Dashboard:** model cards, memory map, TTL state, streaming chat, library, config, logs and a read-only TreePact panel.
 - **Lifecycle daemon:** observes gateway events, followers and crash loops.
 - **Round-trip configuration:** edits `llama-swap.yaml` without destroying comments and rotates backups.
 - **Local Brain:** indexes an optional Obsidian vault with sqlite-vec and local embeddings.
 - **Loopback-only services:** the daemon rejects non-loopback binds and rejects foreign browser origins.
 - **MCP server:** agents (OpenCode, Zed, Claude…) manage warm/cool/est/Brain search themselves — budget-enforced. See [`docs/MCP.md`](docs/MCP.md).
+- **TreePact facade:** humans can launch governed coding-agent runs through
+  `hearth treepact` and review status, diffs and evidence through bounded
+  read-only commands. The dashboard's **TreePact** tab and `GET
+  /api/treepact/*` show the same data through TreePact's own strict,
+  versioned `review` contract — never a database Hearthia opens itself.
+  TreePact remains the independent authority for worktrees, gates and
+  evidence. See [`docs/TREEPACT.md`](docs/TREEPACT.md).
 - **Loadouts & advisor:** `hearth loadout load coding` warms a named set under one whole-set check; `hearth advise` proposes KV-quantisation/context/cooling change-sets when a set doesn't fit.
 
 ## Architecture
@@ -281,6 +288,13 @@ under the same RAM gate as the CLI, `hearthia_loadout` for named sets, and
 `hearthia_brain_search` over the vault. Full setup for Claude Desktop, Claude
 Code, OpenCode and Zed in [`docs/MCP.md`](docs/MCP.md).
 
+TreePact execution is intentionally not exposed through MCP. A human can start
+a governed coding task with `hearth treepact run`; the agent can use Hearthia's
+loopback models, but it cannot authorize its own TreePact run. Integrated runs
+also require a named `[treepact].loadout`, which Hearthia warms under the full
+GGUF-derived memory gate before TreePact starts. See
+[`docs/TREEPACT.md`](docs/TREEPACT.md).
+
 ## Bring the models you already have
 
 Switching runtimes shouldn't mean re-downloading 20 GB. Hearthia adopts
@@ -318,6 +332,7 @@ Model:    an ID or alias from llama-swap.yaml
 | `~/.hearthia/models/` | Local GGUF weights |
 | `~/.hearthia/logs/` | Gateway, daemon and update logs |
 | `~/.hearthia/backups/` | Rotating YAML backups |
+| TreePact's own data directory | Pacts, runs, worktrees and evidence; not managed by Hearthia |
 
 `HEARTHIA_CONFIG` selects another TOML file. Nested settings can also be
 overridden with variables such as `HEARTHIA_MEMORY__MODE=warn`.

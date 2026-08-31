@@ -1,0 +1,75 @@
+version: 1
+project:
+  id: hearthia
+  toolchain: python
+
+workspace:
+  readable:
+    - .
+  writable:
+    - src/
+    - tests/
+  denied:
+    - .git/
+    - .env
+    - credentials/
+    - .venv/
+
+checks:
+  unit:
+    argv: ["uv", "run", "pytest", "tests", "-q"]
+    timeout_seconds: 1800
+    required: true
+    phases: ["attempt", "final"]
+    modes: ["observe", "repair"]
+  lint:
+    argv: ["uv", "run", "ruff", "check", "src", "tests"]
+    timeout_seconds: 300
+    required: true
+    phases: ["final"]
+    modes: ["repair"]
+  types:
+    argv: ["uv", "run", "mypy", "src"]
+    timeout_seconds: 300
+    required: true
+    phases: ["final"]
+    modes: ["repair"]
+  smoke:
+    argv: ["python3", "-m", "compileall", "-q", "src"]
+    timeout_seconds: 300
+    required: false
+    phases: ["attempt", "final"]
+    modes: ["observe", "repair"]
+
+gates:
+  - required_checks_pass
+  - no_denied_paths_changed
+  - no_secrets_in_diff
+  - worktree_consistent
+  - evidence_complete
+
+limits:
+  attempts: 3
+  turns_per_attempt: 30
+  minutes: 45
+  context_bytes: 1000000
+  max_input_tokens: 128000
+  max_output_tokens: 16000
+  model_profile: fast-code
+  memory_mb: 16000
+  network:
+    runtime: loopback_only
+    checks: denied
+
+actions:
+  unavailable:
+    - commit
+    - push
+    - merge
+    - publish
+    - deploy
+    - release
+    - access_credentials
+    - modify_pact
+    - destructive_delete
+    - external_message
