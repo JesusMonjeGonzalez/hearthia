@@ -17,7 +17,7 @@
   <a href="https://github.com/JesusMonjeGonzalez/hearthia/releases/tag/v0.4.0"><img src="https://img.shields.io/badge/release-v0.4.0-E8A33D" alt="Release v0.4.0"></a>
   <img src="https://img.shields.io/badge/macOS-Apple%20Silicon-111111?logo=apple" alt="macOS Apple Silicon">
   <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" alt="Python 3.12+">
-  <img src="https://img.shields.io/badge/tests-361%20passing-2EA043" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-358%20passing-2EA043" alt="Tests">
   <img src="https://img.shields.io/badge/status-active%20development-E8A33D" alt="Active development">
 </p>
 

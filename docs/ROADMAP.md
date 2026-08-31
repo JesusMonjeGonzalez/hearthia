@@ -15,6 +15,9 @@ Updated: 2026-08-31. **Shipped in 0.4.0:**
   API/dashboard, and shared models are preserved during loadout cooling.
 - `hearth est`/`hearth advise` accept `--json` for scriptable machine-readable
   output.
+- Fixed `hearth brain search` always falling through to the slow
+  pure-Python cosine loop instead of the sqlite-vec KNN index (vec0 rejects
+  bound `LIMIT ?`; use `k = ?`), and removed that now-dead fallback path.
 
 **Shipped in 0.3.2:**
 
@@ -60,9 +63,6 @@ crash loops instead of polling.
 
 - **Chat**: the conversation list is `display:none` under 760px with no way
   to open it; export conversation as Markdown.
-- **Brain fallback path**: the non-sqlite-vec cosine fallback is a
-  pure-Python loop over every chunk; batch it with numpy (spec §8) or drop
-  the fallback — sqlite-vec is already a hard dependency. Decide and delete.
 - **Playwright smoke script** under `tests/e2e/` (not in pytest): boot the
   daemon against a mock gateway, click through the six tabs, assert no
   console errors. This caught the dead Chat tab — worth keeping runnable.

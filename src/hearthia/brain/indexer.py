@@ -1,6 +1,5 @@
 """Brain indexer: SQLite + sqlite-vec storage, incremental reindexing, chunking."""
 
-import math
 import re
 import sqlite3
 import struct
@@ -8,18 +7,26 @@ from pathlib import Path
 
 try:
     import sqlite_vec
-
-    _HAS_VEC = True
-except ImportError:
-    _HAS_VEC = False
+except ImportError as exc:  # pragma: no cover - sqlite-vec is a hard dependency
+    raise RuntimeError(
+        "sqlite-vec is a required dependency and could not be imported; "
+        "reinstall hearthia (`pip install --force-reinstall hearthia`)."
+    ) from exc
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
     db = sqlite3.connect(str(db_path))
-    if _HAS_VEC:
-        db.enable_load_extension(True)
+    db.enable_load_extension(True)
+    try:
         sqlite_vec.load(db)
-        db.enable_load_extension(False)
+    except (sqlite3.OperationalError, AttributeError) as exc:
+        raise RuntimeError(
+            "This Python's sqlite3 module was built without SQLite "
+            "extension-loading support, which sqlite-vec needs for Brain "
+            "search. Try a different Python install (e.g. pyenv or Homebrew "
+            "python instead of the macOS system python)."
+        ) from exc
+    db.enable_load_extension(False)
     return db
 
 
@@ -34,29 +41,16 @@ def init_db(db_path: Path, embedding_dim: int = 1024) -> sqlite3.Connection:
              text TEXT NOT NULL,
              PRIMARY KEY (path, idx))"""
     )
-    if _HAS_VEC:
-        db.execute(
-            f"""CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(
-                 embedding float[{embedding_dim}], path TEXT, idx INTEGER)"""
-        )
+    db.execute(
+        f"""CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(
+             embedding float[{embedding_dim}], path TEXT, idx INTEGER)"""
+    )
     db.commit()
     return db
 
 
 def _pack(vec: list[float]) -> bytes:
     return struct.pack(f"{len(vec)}f", *vec)
-
-
-def _unpack(blob: bytes) -> list[float]:
-    n = len(blob) // 4
-    return list(struct.unpack(f"{n}f", blob))
-
-
-def cosine_similarity(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b, strict=False))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(x * x for x in b))
-    return dot / (na * nb) if na and nb else 0.0
 
 
 def strip_frontmatter(text: str) -> str:
@@ -163,8 +157,7 @@ class BrainIndex:
 
     def remove_file(self, rel_path: str) -> None:
         self.db.execute("DELETE FROM chunks WHERE path=?", (rel_path,))
-        if _HAS_VEC:
-            self.db.execute("DELETE FROM vec_chunks WHERE path=?", (rel_path,))
+        self.db.execute("DELETE FROM vec_chunks WHERE path=?", (rel_path,))
 
     def insert_chunks(
         self,
@@ -175,19 +168,17 @@ class BrainIndex:
     ) -> None:
         """Insert chunks with their embeddings, replacing any previous rows for the file."""
         self.db.execute("DELETE FROM chunks WHERE path=?", (rel_path,))
-        if _HAS_VEC:
-            self.db.execute("DELETE FROM vec_chunks WHERE path=?", (rel_path,))
+        self.db.execute("DELETE FROM vec_chunks WHERE path=?", (rel_path,))
         rows = [
             (rel_path, mtime, i, text)
             for i, (text, _) in enumerate(zip(chunks, embeddings, strict=False))
         ]
         self.db.executemany("INSERT INTO chunks (path, mtime, idx, text) VALUES (?,?,?,?)", rows)
-        if _HAS_VEC:
-            for i, emb in enumerate(embeddings):
-                self.db.execute(
-                    "INSERT INTO vec_chunks (embedding, path, idx) VALUES (?, ?, ?)",
-                    (_pack(emb), rel_path, i),
-                )
+        for i, emb in enumerate(embeddings):
+            self.db.execute(
+                "INSERT INTO vec_chunks (embedding, path, idx) VALUES (?, ?, ?)",
+                (_pack(emb), rel_path, i),
+            )
 
     def commit(self) -> None:
         self.db.commit()
@@ -205,51 +196,29 @@ class BrainIndex:
         query_embedding: list[float],
         k: int = 8,
     ) -> list[dict]:
-        """Search for similar chunks. Falls back to Python cosine if sqlite-vec unavailable."""
-        if _HAS_VEC:
-            try:
-                rows = self.db.execute(
-                    """SELECT v.path, v.idx, c.text, v.distance
-                       FROM vec_chunks v
-                       JOIN chunks c ON v.path = c.path AND v.idx = c.idx
-                       WHERE v.embedding MATCH ?
-                       ORDER BY v.distance
-                       LIMIT ?""",
-                    (_pack(query_embedding), k),
-                ).fetchall()
-                return [
-                    {
-                        # KNN distance is L2; embeddings are L2-normalized, so
-                        # cosine similarity = 1 - d²/2
-                        "score": round(1 - (r[3] ** 2) / 2, 3),
-                        "path": r[0],
-                        "idx": r[1],
-                        "text": r[2],
-                    }
-                    for r in rows
-                ]
-            except sqlite3.OperationalError:
-                pass
-
-        rows = self.db.execute("SELECT path, idx, text FROM chunks").fetchall()
-        scored = []
-        for path, idx, text in rows:
-            emb_rows = self.db.execute(
-                "SELECT embedding FROM vec_chunks WHERE path=? AND idx=?",
-                (path, idx),
+        """Search for similar chunks via the sqlite-vec KNN index."""
+        try:
+            rows = self.db.execute(
+                """SELECT v.path, v.idx, c.text, v.distance
+                   FROM vec_chunks v
+                   JOIN chunks c ON v.path = c.path AND v.idx = c.idx
+                   WHERE v.embedding MATCH ? AND k = ?
+                   ORDER BY v.distance""",
+                (_pack(query_embedding), k),
             ).fetchall()
-            if emb_rows:
-                score = cosine_similarity(query_embedding, _unpack(emb_rows[0][0]))
-            else:
-                score = 0.0
-            scored.append((score, path, idx, text))
-        scored.sort(reverse=True)
+        except sqlite3.OperationalError as exc:
+            raise RuntimeError(
+                "brain index is missing or has a stale schema; "
+                "run `hearth brain reindex`"
+            ) from exc
         return [
             {
-                "score": round(s, 3),
-                "path": p,
-                "idx": i,
-                "text": t,
+                # KNN distance is L2; embeddings are L2-normalized, so
+                # cosine similarity = 1 - d²/2
+                "score": round(1 - (r[3] ** 2) / 2, 3),
+                "path": r[0],
+                "idx": r[1],
+                "text": r[2],
             }
-            for s, p, i, t in scored[: max(1, min(k, 25))]
+            for r in rows
         ]

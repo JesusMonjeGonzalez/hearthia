@@ -1,7 +1,6 @@
 from hearthia.brain.indexer import (
     BrainIndex,
     chunk_markdown,
-    cosine_similarity,
     init_db,
     strip_frontmatter,
     vault_files,
@@ -23,19 +22,6 @@ def test_chunk_markdown_wraps_oversized():
 
 def test_chunk_markdown_empty():
     assert chunk_markdown("") == []
-
-
-def test_cosine_similarity_identical():
-    v = [1.0, 0.0, 0.0]
-    assert cosine_similarity(v, v) == 1.0
-
-
-def test_cosine_similarity_orthogonal():
-    assert cosine_similarity([1.0, 0.0], [0.0, 1.0]) == 0.0
-
-
-def test_cosine_similarity_zero_vector():
-    assert cosine_similarity([0.0, 0.0], [1.0, 0.0]) == 0.0
 
 
 def test_vault_files_empty(tmp_path):

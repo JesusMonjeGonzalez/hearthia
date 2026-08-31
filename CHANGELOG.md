@@ -16,6 +16,15 @@
 - Cooling a loadout preserves models declared in another loadout and reports the
   shared membership instead of freeing a model another working set still needs.
 
+### Fixed
+
+- `hearth brain search` always silently ran the O(n) pure-Python cosine
+  fallback instead of the sqlite-vec KNN index: vec0 rejects a bound `LIMIT ?`
+  parameter on `MATCH` queries, so every search raised `OperationalError` and
+  fell through. Fixed the query to use vec0's `k = ?` constraint and removed
+  the now-unused fallback (it also masked schema drift — a stale/missing
+  index now raises a clear error pointing at `hearth brain reindex`).
+
 ## 0.4.0 — 2026-08-31
 
 ### Added
