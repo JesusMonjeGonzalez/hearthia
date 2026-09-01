@@ -1,8 +1,121 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-09-01
 
 ### Added
+
+- **Warm-time ETA predictor** (`hearth warm` prints a predicted duration,
+  `GET /api/models` exposes `eta_seconds`): times every real warm end to
+  end and folds it into a persisted per-model EWMA, so the next warm of
+  that model says roughly how long it will take instead of leaving a
+  spinner with no estimate. No local-model runtime predicts its own warm
+  time from real history.
+- **Sleep prevention while warm** (`sleep_guard.py`, `sleep_prevented` in
+  `GET /api/status` and `hearth status`): holds a standard `caffeinate -s
+  -i` process for as long as any model is warm, releasing it the instant
+  the last one cools — no local-model runtime works around macOS
+  suspending an in-flight generation when the lid closes.
+- **Storage hygiene advisor** (`hearth storage`, `GET /api/storage`):
+  cross-references each model's real file size on disk with when it was
+  last actually warmed, flagging weights unused for 30+ days — real
+  numbers, not a guess, and independent of `--metrics` being configured.
+- **Fleet health rehearsal** (`hearth rehearse [model_id...]`): warms every
+  cold model just long enough to fire one shadow-eval canary
+  (`shadow_eval.py`), then cools it back down — an explicit, manual health
+  check across the whole roster that never disturbs a model already in
+  use. No local-model runtime offers this.
+- **Disk-space preflight for `hearth pull`**: refuses a download upfront
+  when the destination volume does not have enough free space for it,
+  instead of failing partway through a multi-gigabyte transfer.
+- **Speculative-decoding acceptance advisor** (`hearth spec-decode`, `GET
+  /api/spec-decode`): folds llama.cpp's `spec_decode_num_draft_tokens_total`
+  and `spec_decode_num_accepted_tokens_total` counters into a persisted
+  per-model acceptance rate, and flags models below 30% acceptance (past
+  200 draft tokens) as very likely paying drafting overhead without a real
+  speedup. No local-model runtime surfaces this ratio anywhere.
+- **Config lint** (`hearth lint`): checks `llama-swap.yaml` against the
+  models' real GGUF headers and Hearthia's own settings — `--ctx-size`
+  exceeding a model's trained context without a RoPE-scaling flag, alias
+  collisions between models, missing weights files, and loadout/lifecycle
+  rules pointing at unknown model ids. No local-model runtime lints its
+  config against the models it actually manages.
+- **Real token usage ledger** (`hearth usage`, `GET /api/usage`): folds
+  llama.cpp's own `--metrics` counters (`prompt_tokens_total`,
+  `tokens_predicted_total`) into a persisted, per-model lifetime total that
+  survives a cool/warm cycle and a daemon restart — measured, not estimated,
+  and tolerant of the counter reset a process restart causes. No local-model
+  runtime keeps this history.
+- **Context right-sizing advisor** (`hearth rightsize`, `GET
+  /api/rightsizing`): reads llama.cpp's `n_tokens_max` metric — the real
+  high-water mark of context actually used — and suggests a lower
+  `--ctx-size` with the GiB of KV cache it would free, only once a model has
+  genuinely never needed the ceiling it is configured with.
+- **Calibration-aware `hearth advise`**: the KV-cache/context ladder search
+  now corrects every candidate estimate through the same learned
+  `calibration.py` factor the budget gate uses, so a suggested change-set
+  reflects this Mac's measured reality — not just the header arithmetic.
+  Loadout planning (`loadouts.py`) picks up the same correction.
+- **Shadow-eval health gate** (`hearth warm --verify`, `hearth verify
+  <model>`): fires one minimal real completion at a model after it reports
+  HTTP-healthy, catching a broken chat template, quantization, or
+  `--ctx-size` overflow that a health check alone cannot see. No local-model
+  runtime verifies actual inference before calling a warm "healthy".
+- **GGUF weight dedupe across runtimes** (`hearth dedupe [--path DIR]
+  [--link]`): finds byte-identical GGUFs across Hearthia's own `models/`,
+  Ollama and LM Studio folders (same size, then same SHA-256) and, with
+  `--link`, reclaims the duplicated disk space with hardlinks — same
+  filesystem only, reported rather than silently skipped otherwise.
+- **Loadout auto-advisor on drift** (`GET /api/drift-warnings`, surfaced in
+  `hearth doctor`): when `drift.py` catches a re-quantized or replaced GGUF,
+  every declared loadout referencing that model is immediately re-checked
+  against the budget, instead of waiting for the next `hearth loadout load`
+  to fail with a stale plan.
+- **Loadout session replay** (`hearth sessions list|replay`, `GET/POST
+  /api/sessions`): records stable combinations of models that were warm
+  together (60s+, not a fleeting debug warm) and replays one with a single
+  command through the same whole-set budget check a declared loadout uses.
+  No local-model runtime remembers a past resident set at all.
+
+- **Self-calibrating memory model** (`hearth calibration`, `GET
+  /api/calibration`): Hearthia now reconciles its GGUF-header RAM estimates
+  against the real measured RSS of each model once it has stayed warm long
+  enough to settle (~45s), and folds the disagreement into a persisted,
+  per-model EWMA correction factor (`~/.hearthia/calibration.json`). Once a
+  model has two real measurements, every later estimate — the budget gate,
+  `hearth est`/`hearth advise`, the dashboard's resident-size badge (🎯) —
+  is corrected by what Hearthia has actually observed on this exact Mac,
+  clamped to a safe `[0.6x, 1.8x]` range and never trusted from an
+  implausible single reading. No other local-model runtime (Ollama, LM
+  Studio, llama-swap) closes this loop between its own estimate and reality.
+
+- **GGUF license & provenance inspector** (`hearth provenance <model>`,
+  `hearth gguf` now prints a provenance section, `GET
+  /api/models/{id}/provenance`): reads `general.license`,
+  `general.base_model.*`, `general.source.*`, `general.quantized_by` and
+  `general.tags` straight from the GGUF header — the same metadata a
+  quantizer preserved from the source model card. No network access; only
+  reports what is actually present in the file on disk. No local-model
+  runtime surfaces this today.
+- **Battery/thermal-aware RAM budget** (`hearth power`, `power.py`): the
+  wired-memory ceiling `budget.py` enforces now flexes down under a
+  genuinely constrained power state — battery below 20% (×0.7) or active
+  thermal throttling reported by `pmset -g therm` (×0.85), stacked
+  multiplicatively and floored at 4 GiB — so `hearth warm`/the dashboard's
+  Warm button can refuse a warm they would otherwise allow. AC power with a
+  low reported battery, or a nominal state, changes nothing. Best-effort:
+  probe failures leave the ceiling untouched rather than guessing.
+- **Model drift detector** (`drift.py`, wired into the calibration
+  recorder): a `(size, mtime)` fingerprint per model catches a re-quantized
+  or replaced GGUF the moment it warms again with a changed file underneath
+  the same model id, and drops that model's now-stale RAM calibration
+  instead of silently trusting samples that describe a file that no longer
+  exists.
+- **Predictive idle forecast** (`Telemetry.usage_forecast`, surfaced in
+  `hearth status` and `/api/models`/`/api/status`): from the trend of gaps
+  between a model's own recent requests, forecasts whether it is likely to
+  see more activity before its TTL idles it out (🔮 in the dashboard) —
+  no local-model runtime forecasts its own TTL behavior instead of just
+  counting down a static timer.
 
 - `hearth loadout sync` projects the authoritative `[loadouts]` configuration
   into readable `metadata.loadout` fields while preserving model roles and YAML

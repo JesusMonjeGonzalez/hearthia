@@ -14,10 +14,10 @@
 
 <p align="center">
   <a href="https://github.com/JesusMonjeGonzalez/hearthia/actions/workflows/ci.yml"><img src="https://github.com/JesusMonjeGonzalez/hearthia/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/JesusMonjeGonzalez/hearthia/releases/tag/v0.4.0"><img src="https://img.shields.io/badge/release-v0.4.0-E8A33D" alt="Release v0.4.0"></a>
+  <a href="https://github.com/JesusMonjeGonzalez/hearthia/releases/tag/v0.5.0"><img src="https://img.shields.io/badge/release-v0.5.0-E8A33D" alt="Release v0.5.0"></a>
   <img src="https://img.shields.io/badge/macOS-Apple%20Silicon-111111?logo=apple" alt="macOS Apple Silicon">
   <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" alt="Python 3.12+">
-  <img src="https://img.shields.io/badge/tests-358%20passing-2EA043" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-542%20passing-2EA043" alt="Tests">
   <img src="https://img.shields.io/badge/status-active%20development-E8A33D" alt="Active development">
 </p>
 
@@ -100,6 +100,21 @@ Cydonia-24B-Q4_K_M.gguf
 The gate is enforced in the CLI, the dashboard, and the lifecycle engine
 (follower models never spawn over budget). Configure it in `config.toml`:
 
+The estimator also **learns**: once a model has stayed warm long enough to
+settle, Hearthia compares its header estimate against the real measured RSS
+and folds the disagreement into a persisted per-model correction factor —
+so later estimates for that exact GGUF get more accurate the more it is
+actually run on this Mac.
+
+```bash
+$ hearth calibration
+  qwen-coder-30b               x1.14  (3 sample(s), header under-estimated)  last measured 22.6 GiB vs estimated 19.8 GiB
+```
+
+No other local-model runtime (Ollama, LM Studio, llama-swap) reconciles its
+own footprint estimate against reality, let alone remembers the correction
+between runs.
+
 ```toml
 [memory]
 mode = "enforce"   # enforce | warn | off
@@ -128,6 +143,23 @@ uv run scripts/benchmark.py
   TreePact remains the independent authority for worktrees, gates and
   evidence. See [`docs/TREEPACT.md`](docs/TREEPACT.md).
 - **Loadouts & advisor:** `hearth loadout load coding` warms a named set under one whole-set check; `hearth loadout cool coding` preserves models shared by another declared loadout; `hearth advise` proposes KV-quantisation/context/cooling change-sets when a set doesn't fit.
+- **Self-calibrating memory model:** `hearth calibration` learns a per-model correction between the header estimate and real measured RSS. See [The RAM budget gate](#the-ram-budget-gate).
+- **GGUF license & provenance inspector:** `hearth provenance <model>` reads license, base model and source metadata straight from the GGUF header — no network access, no assumed fields.
+- **Battery/thermal-aware budget:** `hearth power` shows the current state; a near-empty battery or active thermal throttling flexes the wired ceiling down for `hearth warm` and the dashboard's Warm button.
+- **Model drift detection:** a re-quantized or replaced GGUF is caught by its changed `(size, mtime)` fingerprint the next time it warms, and its stale RAM calibration is dropped instead of trusted.
+- **Predictive idle forecast:** `hearth status` and the dashboard (🔮) show whether a model is likely to see more activity before its TTL idles it out, learned from its own recent usage gaps.
+- **Shadow-eval health gate:** `hearth warm --verify` / `hearth verify <model>` fire a real canary completion after a warm — an HTTP health check alone cannot see a broken chat template or a `--ctx-size` overflow.
+- **GGUF weight dedupe:** `hearth dedupe [--link]` finds byte-identical GGUFs across Hearthia, Ollama and LM Studio folders and reclaims the duplicated disk space with hardlinks.
+- **Loadout drift advisor:** a re-quantized or replaced model automatically re-checks every loadout that references it, surfaced at `GET /api/drift-warnings` and in `hearth doctor`.
+- **Loadout session replay:** `hearth sessions list|replay` remembers stable combinations of models that were warm together and replays one with a single command.
+- **Real token usage ledger:** `hearth usage` persists llama.cpp's own `--metrics` token counters per model, surviving restarts — measured, not estimated.
+- **Context right-sizing advisor:** `hearth rightsize` suggests a lower `--ctx-size` from llama.cpp's real `n_tokens_max` high-water mark, with the GiB it would free.
+- **Speculative-decoding acceptance advisor:** `hearth spec-decode` flags draft-model configs with a low real acceptance rate — drafting overhead without a real speedup.
+- **Config lint:** `hearth lint` checks `--ctx-size` against a model's trained context, alias collisions, missing weights, and loadout/lifecycle rules referencing unknown models.
+- **Warm-time ETA predictor:** `hearth warm` predicts how long it will take from real past durations.
+- **Sleep prevention while warm:** holds a standard `caffeinate` process for as long as any model is warm.
+- **Storage hygiene advisor:** `hearth storage` flags model weights unused for 30+ days.
+- **Fleet health rehearsal:** `hearth rehearse` canary-checks every cold model, then cools it back down.
 
 ## Architecture
 
@@ -224,10 +256,24 @@ hearth gguf ~/models/model.gguf  # header-only cost report for any GGUF on disk
 hearth loadout load coding       # warm a named set under one budget check
 hearth warm local-model          # budget-checked; --force overrides
 hearth cool --all
-hearth pull owner/model-GGUF --quant Q4_K_M --add
+hearth pull owner/model-GGUF --quant Q4_K_M --add   # refuses if the disk can't hold it
 hearth status                    # resident RAM, tok/s, TTL countdowns, budget
 hearth logs -f
 hearth doctor
+
+# self-tuning & diagnostics (v0.5.0)
+hearth calibration               # learned RAM-estimate correction from real warms
+hearth provenance <model>        # license + lineage straight from the GGUF header
+hearth lint                      # config vs real GGUF headers: ctx overrun, aliases, missing files
+hearth usage                     # real lifetime token counts (needs --metrics on the model)
+hearth rightsize                 # suggest a lower --ctx-size from real observed usage
+hearth spec-decode               # draft-model acceptance rate
+hearth storage                   # disk footprint per model, stale weights flagged
+hearth rehearse                  # canary-check every cold model, then cool it back down
+hearth power                     # battery/thermal state and its RAM ceiling reduction
+hearth dedupe --link             # reclaim disk from byte-identical GGUFs across runtimes
+hearth sessions list|replay      # replay a past combination of warm models
+hearth verify <model>            # real-completion check on an already-warm model
 ```
 
 Planning a loadout before committing RAM (Qwen3.8-27B, the local-class
@@ -334,6 +380,7 @@ Model:    an ID or alias from llama-swap.yaml
 | `~/.hearthia/models/` | Local GGUF weights |
 | `~/.hearthia/logs/` | Gateway, daemon and update logs |
 | `~/.hearthia/backups/` | Rotating YAML backups |
+| `~/.hearthia/*.json` | Learned state: RAM calibration, token usage, load-time ETA, sessions, drift fingerprints, last-used tracking |
 | TreePact's own data directory | Pacts, runs, worktrees and evidence; not managed by Hearthia |
 
 `HEARTHIA_CONFIG` selects another TOML file. Nested settings can also be
