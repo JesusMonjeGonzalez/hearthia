@@ -111,3 +111,22 @@ def test_advise_lines_show_the_arithmetic():
     advice = advise_fit([a, b], ["a", "b"], {"other": 16 * GIB}, 36 * GIB, 30 * GIB)
     for o in advice["options"]:
         assert any("GiB" in line for line in o.lines)
+
+
+def test_advise_uses_calibration_to_change_the_verdict(tmp_path):
+    from hearthia.calibration import CalibrationStore
+
+    m = _model("a")
+    uncalibrated = estimate_bytes(m)
+    store = CalibrationStore(tmp_path / "calibration.json")
+    # learn that "a" actually needs far less than the header estimate
+    store.record("a", uncalibrated, int(uncalibrated * 0.6))
+    store.record("a", uncalibrated, int(uncalibrated * 0.6))
+
+    without = advise_fit([m], ["a"], {"other": 34 * GIB}, 36 * GIB, 30 * GIB)
+    assert without["fits"] is False
+
+    with_calibration = advise_fit(
+        [m], ["a"], {"other": 34 * GIB}, 36 * GIB, 30 * GIB, calibration=store
+    )
+    assert with_calibration["total_bytes"] < without["total_bytes"]

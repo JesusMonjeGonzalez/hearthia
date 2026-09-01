@@ -165,6 +165,10 @@ export async function refreshModels() {
       const lifecycleTxt = m.roles && m.roles.length
         ? "🔗 " + m.roles.map(esc).join(", ")
         : "";
+      const forecastHint =
+        !lifecycleTxt && m.ttl && m.forecast && m.forecast.likely_active_again
+          ? ` <span class="forecast-hint" title="Based on how often this model has been used recently">🔮 likely active again first</span>`
+          : "";
       const unloadTxt = lifecycleTxt
         ? lifecycleTxt
         : m.ttl
@@ -179,12 +183,12 @@ export async function refreshModels() {
           <dt>id</dt><dd>${esc(m.id)}${m.aliases.length ? " · " + m.aliases.map(esc).join(", ") : ""}</dd>
           <dt>context</dt><dd>${m.ctx ? m.ctx.toLocaleString() + " tokens" : "model default"}</dd>
           <dt>last speed</dt><dd class="perf">${perf}</dd>
-          <dt>auto-unload</dt><dd class="unload-dd" data-ttl="${m.ttl || 0}" data-last="${m.last_activity || 0}" data-lifecycle="${lifecycleTxt ? 1 : 0}"><span class="ttl-wrap"></span>${esc(unloadTxt)}</dd>
-          <dt>weights</dt><dd>${m.size ? fmtGB(m.size) : "–"}${m.est_resident ? ` · <span class="est-res" title="From the GGUF header: weights + KV cache at the configured context${m.est_known ? "" : " (file-size guess)"}">est. ${fmtGB(m.est_resident)} resident</span>` : ""}</dd>
+          <dt>auto-unload</dt><dd class="unload-dd" data-ttl="${m.ttl || 0}" data-last="${m.last_activity || 0}" data-lifecycle="${lifecycleTxt ? 1 : 0}"><span class="ttl-wrap"></span>${esc(unloadTxt)}${forecastHint}</dd>
+          <dt>weights</dt><dd>${m.size ? fmtGB(m.size) : "–"}${m.est_resident ? ` · <span class="est-res" title="From the GGUF header: weights + KV cache at the configured context${m.est_known ? "" : " (file-size guess)"}${m.est_calibrated ? " — corrected by real measured warms on this Mac" : ""}">est. ${fmtGB(m.est_resident)} resident${m.est_calibrated ? " 🎯" : ""}</span>` : ""}</dd>
         </dl>
         ${m.file_exists ? "" : `<div class="missing">weights file missing — still downloading?</div>`}
         <div class="card-actions">
-          <button class="btn btn-primary act-load" ${m.state !== "stopped" || !m.file_exists ? "disabled" : ""}>Warm</button>
+          <button class="btn btn-primary act-load" ${m.state !== "stopped" || !m.file_exists ? "disabled" : ""} title="${m.eta_seconds ? `usually ready in ~${Math.round(m.eta_seconds)}s` : ""}">Warm${m.eta_seconds ? ` (~${Math.round(m.eta_seconds)}s)` : ""}</button>
           <button class="btn btn-cool act-unload" ${m.state === "stopped" ? "disabled" : ""}>Cool</button>
           <button class="btn btn-quiet act-settings" title="TTL, context, temperature">Settings</button>
         </div>

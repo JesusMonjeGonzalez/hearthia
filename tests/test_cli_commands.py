@@ -37,12 +37,83 @@ def test_warm_and_cool(tmp_path, config_path):
 
 
 @respx.mock
+def test_warm_records_and_shows_load_time(tmp_path, config_path):
+    from hearthia.load_time import LoadTimeLedger
+
+    respx.get(f"{GW}/running").respond(200, json={"running": []})
+    respx.get(f"{GW}/upstream/big-coder/health").respond(200)
+    env = _env(tmp_path, config_path)
+
+    result = runner.invoke(app, ["warm", "big-coder"], env=env)
+    assert result.exit_code == 0
+    assert "is warm (took" in result.output
+
+    ledger = LoadTimeLedger(config_path.parent / "load_times.json")
+    assert ledger.eta("big-coder") is not None
+
+
+@respx.mock
+def test_warm_shows_predicted_eta_from_history(tmp_path, config_path):
+    from hearthia.load_time import LoadTimeLedger
+
+    LoadTimeLedger(config_path.parent / "load_times.json").record("big-coder", 42.0)
+    respx.get(f"{GW}/running").respond(200, json={"running": []})
+    respx.get(f"{GW}/upstream/big-coder/health").respond(200)
+
+    result = runner.invoke(app, ["warm", "big-coder"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "usually ~42s" in result.output
+
+
+@respx.mock
+def test_warm_verify_reports_successful_canary(tmp_path, config_path):
+    respx.get(f"{GW}/running").respond(200, json={"running": []})
+    respx.get(f"{GW}/upstream/big-coder/health").respond(200)
+    respx.post(f"{GW}/v1/chat/completions").respond(
+        200, json={"choices": [{"message": {"content": "OK"}}]}
+    )
+    result = runner.invoke(app, ["warm", "big-coder", "--verify"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "shadow-eval canary: OK" in result.output
+
+
+@respx.mock
+def test_warm_verify_fails_exit_code_on_empty_completion(tmp_path, config_path):
+    respx.get(f"{GW}/running").respond(200, json={"running": []})
+    respx.get(f"{GW}/upstream/big-coder/health").respond(200)
+    respx.post(f"{GW}/v1/chat/completions").respond(
+        200, json={"choices": [{"message": {"content": ""}}]}
+    )
+    result = runner.invoke(app, ["warm", "big-coder", "--verify"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 1
+    assert "shadow-eval canary FAILED" in result.output
+
+
+@respx.mock
+def test_verify_command_ok(tmp_path, config_path):
+    respx.post(f"{GW}/v1/chat/completions").respond(
+        200, json={"choices": [{"message": {"content": "OK"}}]}
+    )
+    result = runner.invoke(app, ["verify", "big-coder"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "OK" in result.output
+
+
+@respx.mock
+def test_verify_command_failure(tmp_path, config_path):
+    respx.post(f"{GW}/v1/chat/completions").respond(500)
+    result = runner.invoke(app, ["verify", "big-coder"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 1
+    assert "FAILED" in result.output
+
+
+@respx.mock
 def test_warm_blocked_by_ram_budget(tmp_path, config_path, monkeypatch):
     """When the budget says no, warm refuses with 409-worthy detail."""
     import hearthia.cli as cli
     from hearthia.budget import WarmDecision
 
-    def blocked(models, candidate_id, running_models, mode):
+    def blocked(models, candidate_id, running_models, mode, calibration=None, power=None):
         return WarmDecision(
             candidate_id,
             False,
@@ -179,6 +250,30 @@ def test_pull_command_exists():
     result = runner.invoke(app, ["pull", "--help"])
     assert result.exit_code == 0
     assert "pull" in result.output.lower()
+
+
+@respx.mock
+def test_pull_refuses_when_disk_space_is_insufficient(tmp_path, config_path, monkeypatch):
+    import shutil
+
+    respx.get("https://huggingface.co/api/models/org/repo/tree/main").respond(
+        200,
+        json=[
+            {
+                "path": "model.Q4_K_M.gguf",
+                "size": 10 * 2**30,
+                "lfs": {"oid": "a" * 64},
+            }
+        ],
+    )
+    import types
+
+    monkeypatch.setattr(
+        shutil, "disk_usage", lambda path: types.SimpleNamespace(free=1 * 2**30, total=0, used=0)
+    )
+    result = runner.invoke(app, ["pull", "org/repo"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 1
+    assert "not enough disk space" in result.output
 
 
 def test_brain_command_exists():
@@ -452,3 +547,320 @@ def test_advise_json_is_parseable_with_serializable_options(tmp_path, config_pat
     assert payload["plan"] is None
     for option in payload["options"]:
         assert set(option) == {"kind", "label", "flags", "total_bytes", "lines"}
+
+
+def test_usage_command_empty_by_default(tmp_path, config_path):
+    result = runner.invoke(app, ["usage"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "no usage data yet" in result.output
+
+
+def test_usage_command_reports_ledger(tmp_path, config_path):
+    from hearthia.usage_ledger import UsageLedger
+
+    UsageLedger(config_path.parent / "usage.json").observe(
+        "big-coder", prompt_tokens_total=1234, tokens_predicted_total=567
+    )
+    result = runner.invoke(app, ["usage"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "big-coder" in result.output
+    assert "1,234" in result.output
+    assert "567" in result.output
+
+
+@respx.mock
+def test_rehearse_command_reports_healthy_models(tmp_path, config_path):
+    respx.get(f"{GW}/running").respond(200, json={"running": []})
+    respx.get(f"{GW}/upstream/big-coder/health").respond(200)
+    respx.get(f"{GW}/upstream/tiny-embed/health").respond(200)
+    respx.post(f"{GW}/v1/chat/completions").respond(
+        200, json={"choices": [{"message": {"content": "OK"}}]}
+    )
+    respx.post(f"{GW}/api/models/unload/big-coder").respond(200)
+    respx.post(f"{GW}/api/models/unload/tiny-embed").respond(200)
+
+    result = runner.invoke(app, ["rehearse"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "2/2 healthy" in result.output
+
+
+@respx.mock
+def test_rehearse_command_can_target_a_single_model(tmp_path, config_path):
+    respx.get(f"{GW}/running").respond(200, json={"running": []})
+    respx.get(f"{GW}/upstream/big-coder/health").respond(200)
+    respx.post(f"{GW}/v1/chat/completions").respond(
+        200, json={"choices": [{"message": {"content": "OK"}}]}
+    )
+    respx.post(f"{GW}/api/models/unload/big-coder").respond(200)
+
+    result = runner.invoke(app, ["rehearse", "big-coder"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "1/1 healthy" in result.output
+
+
+def test_rehearse_command_unknown_model_id(tmp_path, config_path):
+    result = runner.invoke(app, ["rehearse", "ghost"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 1
+    assert "no matching models" in result.output
+
+
+def test_lint_command_reports_issues_and_exits_nonzero(tmp_path, config_path):
+    result = runner.invoke(app, ["lint"], env=_env(tmp_path, config_path))
+    # the sample config's models point at /tmp/models/*.gguf, absent here
+    assert result.exit_code == 1
+    assert "weights file not found" in result.output
+
+
+def test_spec_decode_command_empty_by_default(tmp_path, config_path):
+    result = runner.invoke(app, ["spec-decode"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "no speculative-decoding data yet" in result.output
+
+
+def test_spec_decode_command_flags_underperforming_model(tmp_path, config_path):
+    from hearthia.spec_decode import SpecDecodeLedger
+
+    SpecDecodeLedger(config_path.parent / "spec_decode.json").observe(
+        "big-coder", draft_tokens_total=1000, accepted_tokens_total=100
+    )
+    result = runner.invoke(app, ["spec-decode"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "big-coder" in result.output
+    assert "10.0% accepted" in result.output
+    assert "consider dropping --spec-draft-model" in result.output
+
+
+def test_rightsize_command_empty_without_usage(tmp_path, config_path):
+    result = runner.invoke(app, ["rightsize"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "no right-sizing suggestions" in result.output
+
+
+def test_rightsize_command_reports_suggestion(tmp_path, config_path):
+    import struct
+
+    from hearthia.registry import Registry
+    from hearthia.usage_ledger import UsageLedger
+
+    gguf = config_path.parent / "oversized.gguf"
+
+    def _kv_str(key: str, value: str) -> bytes:
+        kb, vb = key.encode(), value.encode()
+        return (
+            struct.pack("<Q", len(kb)) + kb + struct.pack("<I", 8) + struct.pack("<Q", len(vb)) + vb
+        )
+
+    def _kv_u32(key: str, value: int) -> bytes:
+        kb = key.encode()
+        return struct.pack("<Q", len(kb)) + kb + struct.pack("<I", 4) + struct.pack("<I", value)
+
+    kvs = [
+        _kv_str("general.architecture", "llama"),
+        _kv_u32("llama.block_count", 32),
+        _kv_u32("llama.attention.head_count", 8),
+        _kv_u32("llama.attention.head_count_kv", 8),
+        _kv_u32("llama.attention.key_length", 128),
+        _kv_u32("llama.attention.value_length", 128),
+        _kv_u32("llama.context_length", 131072),
+    ]
+    gguf.write_bytes(b"GGUF" + struct.pack("<IQQ", 3, 0, len(kvs)) + b"".join(kvs))
+    Registry(config_path, tmp_path / "backups").add_model(
+        "oversized-model", name="Oversized", gguf_path=str(gguf), ctx=131072
+    )
+    UsageLedger(config_path.parent / "usage.json").observe("oversized-model", n_tokens_max=100)
+
+    result = runner.invoke(app, ["rightsize"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "oversized-model" in result.output
+    assert "--ctx-size" in result.output
+
+
+def test_sessions_list_empty(tmp_path, config_path):
+    result = runner.invoke(app, ["sessions", "list"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "no session history yet" in result.output
+
+
+def test_sessions_list_and_replay(tmp_path, config_path):
+    from hearthia.sessions import SessionHistory
+
+    history = SessionHistory(config_path.parent / "sessions.json")
+    history.observe({"big-coder"}, now=0.0)
+    history.observe(set(), now=1000.0)
+
+    result = runner.invoke(app, ["sessions", "list"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "big-coder" in result.output
+    assert "[0]" in result.output
+
+
+@respx.mock
+def test_sessions_replay_warms_recorded_set(tmp_path, config_path):
+    from hearthia.sessions import SessionHistory
+
+    history = SessionHistory(config_path.parent / "sessions.json")
+    history.observe({"big-coder"}, now=0.0)
+    history.observe(set(), now=1000.0)
+
+    respx.get(f"{GW}/running").respond(200, json={"running": []})
+    respx.get(f"{GW}/upstream/big-coder/health").respond(200)
+    result = runner.invoke(app, ["sessions", "replay", "0"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "warmed: big-coder" in result.output
+
+
+def test_sessions_replay_unknown_index(tmp_path, config_path):
+    result = runner.invoke(app, ["sessions", "replay", "5"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 1
+    assert "no session at index" in result.output
+
+
+def test_storage_command_empty_without_files(tmp_path, config_path):
+    result = runner.invoke(app, ["storage"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "no model weights found" in result.output
+
+
+def test_storage_command_reports_and_flags_stale(tmp_path, config_path):
+    from hearthia.registry import Registry
+    from hearthia.storage import LastUsedTracker
+
+    gguf = config_path.parent / "weights.gguf"
+    gguf.write_bytes(b"x" * 5000)
+    Registry(config_path, tmp_path / "backups").add_model(
+        "stored-model", name="Stored", gguf_path=str(gguf)
+    )
+    tracker = LastUsedTracker(config_path.parent / "last_used.json")
+    import time as _t
+
+    tracker.touch({"stored-model"}, now=_t.time() - 40 * 86400)
+
+    result = runner.invoke(app, ["storage"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "stored-model" in result.output
+    assert "stale" in result.output
+    assert "total:" in result.output
+
+
+def test_dedupe_command_reports_no_files(tmp_path, config_path, monkeypatch):
+    empty = tmp_path / "empty-root"
+    empty.mkdir()
+    monkeypatch.setattr("hearthia.dedupe.default_roots", lambda: [empty])
+    result = runner.invoke(app, ["dedupe"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "no .gguf files found" in result.output
+
+
+def test_dedupe_command_finds_and_links_duplicates(tmp_path, config_path, monkeypatch):
+    root = tmp_path / "models-root"
+    root.mkdir()
+    a = root / "a.gguf"
+    b = root / "b.gguf"
+    a.write_bytes(b"x" * 1000)
+    b.write_bytes(b"x" * 1000)
+    monkeypatch.setattr("hearthia.dedupe.default_roots", lambda: [])
+
+    result = runner.invoke(app, ["dedupe", "--path", str(root)], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "wasted space" in result.output
+    assert "--link" in result.output
+
+    result_link = runner.invoke(
+        app, ["dedupe", "--path", str(root), "--link"], env=_env(tmp_path, config_path)
+    )
+    assert result_link.exit_code == 0
+    assert "linked ->" in result_link.output
+    assert a.stat().st_ino == b.stat().st_ino
+
+
+def test_power_command_reports_nominal_state(tmp_path, config_path, monkeypatch):
+    from hearthia.power import PowerState
+
+    monkeypatch.setattr("hearthia.power.read_power_state", lambda: PowerState())
+    result = runner.invoke(app, ["power"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "AC power" in result.output
+    assert "no RAM ceiling reduction" in result.output
+
+
+def test_power_command_reports_low_battery(tmp_path, config_path, monkeypatch):
+    from hearthia.power import PowerState
+
+    monkeypatch.setattr(
+        "hearthia.power.read_power_state",
+        lambda: PowerState(on_battery=True, battery_percent=5, thermal_throttled=False),
+    )
+    result = runner.invoke(app, ["power"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "battery" in result.output
+    assert "5%" in result.output
+    assert "70%" in result.output  # effective RAM ceiling
+
+
+def test_provenance_command_unknown_model(tmp_path, config_path):
+    result = runner.invoke(app, ["provenance", "nope"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 1
+    assert "unknown model" in result.output
+
+
+def test_provenance_command_missing_file(tmp_path, config_path):
+    result = runner.invoke(app, ["provenance", "big-coder"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 1
+    assert "not found" in result.output
+
+
+def test_provenance_command_reads_header(tmp_path, config_path):
+    import struct
+
+    from hearthia.registry import Registry
+
+    gguf = config_path.parent / "licensed.gguf"
+
+    def _kv_str(key: str, value: str) -> bytes:
+        kb, vb = key.encode(), value.encode()
+        return (
+            struct.pack("<Q", len(kb)) + kb + struct.pack("<I", 8) + struct.pack("<Q", len(vb)) + vb
+        )
+
+    kvs = [_kv_str("general.license", "mit")]
+    gguf.write_bytes(b"GGUF" + struct.pack("<IQQ", 3, 0, len(kvs)) + b"".join(kvs))
+    Registry(config_path, tmp_path / "backups").add_model(
+        "licensed-model", name="Licensed", gguf_path=str(gguf)
+    )
+
+    result = runner.invoke(app, ["provenance", "licensed-model"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "mit" in result.output
+
+
+def test_calibration_command_empty_by_default(tmp_path, config_path):
+    result = runner.invoke(app, ["calibration"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "no calibration data yet" in result.output
+
+
+def test_calibration_command_reports_learned_corrections(tmp_path, config_path):
+    from hearthia.calibration import CalibrationStore
+
+    store = CalibrationStore(config_path.parent / "calibration.json")
+    store.record("big-coder", 10 * 2**30, 12 * 2**30)
+    store.record("big-coder", 10 * 2**30, 12 * 2**30)
+
+    result = runner.invoke(app, ["calibration"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "big-coder" in result.output
+    assert "x1.20" in result.output
+    assert "under-estimated" in result.output
+
+
+def test_calibration_command_json(tmp_path, config_path):
+    from hearthia.calibration import CalibrationStore
+
+    store = CalibrationStore(config_path.parent / "calibration.json")
+    store.record("big-coder", 10 * 2**30, 12 * 2**30)
+    store.record("big-coder", 10 * 2**30, 12 * 2**30)
+
+    result = runner.invoke(app, ["calibration", "--json"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["big-coder"]["samples"] == 2

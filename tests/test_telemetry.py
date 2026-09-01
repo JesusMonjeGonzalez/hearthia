@@ -89,6 +89,69 @@ async def test_poll_upstream_metrics_fetches_from_proxy_port():
 
 
 @respx.mock
+async def test_poll_upstream_metrics_feeds_the_usage_ledger(tmp_path):
+    from hearthia.usage_ledger import UsageLedger
+
+    respx.get(f"{BASE}/running").respond(
+        200,
+        json={
+            "running": [
+                {"model": "big-coder", "state": "ready", "proxy": "http://127.0.0.1:8080"},
+            ]
+        },
+    )
+    respx.get("http://127.0.0.1:8080/metrics").respond(
+        200,
+        text=(
+            "llamacpp:prompt_tokens_total 1000\n"
+            "llamacpp:tokens_predicted_total 400\n"
+            "llamacpp:n_tokens_max 4096\n"
+        ),
+    )
+    gw = Gateway(BASE)
+    ledger = UsageLedger(tmp_path / "usage.json")
+    tel = Telemetry(gw, usage_ledger=ledger)
+    await tel.poll_upstream_metrics()
+    entry = ledger.entry("big-coder")
+    assert entry is not None
+    assert entry.prompt_tokens == 1000
+    assert entry.completion_tokens == 400
+    assert entry.max_context_observed == 4096
+    await gw.close()
+
+
+@respx.mock
+async def test_poll_upstream_metrics_feeds_the_spec_decode_ledger(tmp_path):
+    from hearthia.spec_decode import SpecDecodeLedger
+
+    respx.get(f"{BASE}/running").respond(
+        200,
+        json={
+            "running": [
+                {"model": "big-coder", "state": "ready", "proxy": "http://127.0.0.1:8080"},
+            ]
+        },
+    )
+    respx.get("http://127.0.0.1:8080/metrics").respond(
+        200,
+        text=(
+            "llamacpp:spec_decode_num_draft_tokens_total 1000\n"
+            "llamacpp:spec_decode_num_accepted_tokens_total 100\n"
+        ),
+    )
+    gw = Gateway(BASE)
+    ledger = SpecDecodeLedger(tmp_path / "spec.json")
+    tel = Telemetry(gw, spec_decode_ledger=ledger)
+    await tel.poll_upstream_metrics()
+    entry = ledger.entry("big-coder")
+    assert entry is not None
+    assert entry.draft_tokens == 1000
+    assert entry.accepted_tokens == 100
+    assert entry.underperforming is True
+    await gw.close()
+
+
+@respx.mock
 async def test_poll_upstream_metrics_does_not_poll_upstream_route():
     """TTL-poisoning regression: must poll the model server's own port, never /upstream."""
     respx.get(f"{BASE}/running").respond(
@@ -230,3 +293,53 @@ def test_crash_looping_flag():
     assert tel.crash_looping() is True
     tel._crashes = [now - 400, now - 350, now - 320]
     assert tel.crash_looping() is False
+
+
+def test_usage_forecast_needs_a_ttl():
+    gw = Gateway("http://127.0.0.1:9292")
+    tel = Telemetry(gw)
+    tel._note_activity({"big-coder"})
+    tel._note_activity({"big-coder"})
+    assert tel.usage_forecast("big-coder", None) is None
+    assert tel.usage_forecast("big-coder", 0) is None
+
+
+def test_usage_forecast_needs_at_least_two_gaps():
+    gw = Gateway("http://127.0.0.1:9292")
+    tel = Telemetry(gw)
+    tel._note_activity({"big-coder"})  # first sighting: no gap recorded yet
+    assert tel.usage_forecast("big-coder", 600) is None
+
+
+def test_usage_forecast_predicts_more_activity_for_short_gaps(monkeypatch):
+    gw = Gateway("http://127.0.0.1:9292")
+    tel = Telemetry(gw)
+    t = [1000.0]
+    monkeypatch.setattr("hearthia.telemetry.time.time", lambda: t[0])
+    tel._note_activity({"big-coder"})
+    t[0] += 30
+    tel._note_activity({"big-coder"})
+    t[0] += 30
+    tel._note_activity({"big-coder"})
+
+    forecast = tel.usage_forecast("big-coder", ttl=600)
+    assert forecast is not None
+    assert forecast["avg_gap_seconds"] == 30
+    assert forecast["likely_active_again"] is True
+    assert 0 < forecast["confidence"] <= 1.0
+
+
+def test_usage_forecast_predicts_idle_out_for_long_gaps(monkeypatch):
+    gw = Gateway("http://127.0.0.1:9292")
+    tel = Telemetry(gw)
+    t = [1000.0]
+    monkeypatch.setattr("hearthia.telemetry.time.time", lambda: t[0])
+    tel._note_activity({"big-coder"})
+    t[0] += 900
+    tel._note_activity({"big-coder"})
+    t[0] += 900
+    tel._note_activity({"big-coder"})
+
+    forecast = tel.usage_forecast("big-coder", ttl=600)
+    assert forecast is not None
+    assert forecast["likely_active_again"] is False

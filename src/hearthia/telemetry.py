@@ -5,6 +5,7 @@ import re
 import subprocess
 import time
 from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING
 
 import psutil
 
@@ -15,6 +16,13 @@ log = logging.getLogger("hearthia.telemetry")
 _RE_REQ = re.compile(r'"POST /(?:v1/(?:chat/completions|completions|embeddings)|upstream)')
 _RE_EVAL = re.compile(r"<([^>]+)>.*?\beval time\s*=.*?([\d.]+) tokens per second")
 _RE_METRICS = re.compile(r"^llamacpp:(\w+)\s+([\d.eE+-]+)", re.M)
+
+if TYPE_CHECKING:
+    from hearthia.spec_decode import SpecDecodeLedger
+    from hearthia.usage_ledger import UsageLedger
+
+_MAX_GAP_SAMPLES = 8
+_MIN_GAP_SAMPLES_FOR_FORECAST = 2
 
 
 def wired_limit_bytes(total: int) -> int:
@@ -29,6 +37,22 @@ def wired_limit_bytes(total: int) -> int:
     except (ValueError, OSError):
         pass
     return int(total * 0.75)
+
+
+def _int_metric(vals: dict[str, str], key: str) -> int | None:
+    """Parse one Prometheus metric value as an int, or None when absent/invalid.
+
+    ``--metrics`` must be enabled on the model's `cmd` for these counters to
+    exist at all; an absent key (older llama.cpp, or metrics disabled) must
+    not be confused with an observed value of zero.
+    """
+    raw = vals.get(key)
+    if raw is None:
+        return None
+    try:
+        return int(float(raw))
+    except ValueError:
+        return None
 
 
 def llama_server_procs() -> list[dict]:
@@ -53,14 +77,22 @@ class Telemetry:
     and polls each running model server's own /metrics port for real throughput.
     """
 
-    def __init__(self, gw: Gateway) -> None:
+    def __init__(
+        self,
+        gw: Gateway,
+        usage_ledger: "UsageLedger | None" = None,
+        spec_decode_ledger: "SpecDecodeLedger | None" = None,
+    ) -> None:
         self._gw = gw
+        self._usage_ledger = usage_ledger
+        self._spec_decode_ledger = spec_decode_ledger
         self.activity: dict[str, dict] = {}
         self.running_now: set[str] = set()
         self.events_connected = False
         self._crashes: list[float] = []
         self._last_crash_notify = 0.0
         self._no_metrics: set[str] = set()
+        self._gaps: dict[str, list[float]] = {}
 
     def crash_looping(self) -> bool:
         """True while 3+ model server crashes landed in the last 5 minutes."""
@@ -70,7 +102,39 @@ class Telemetry:
     def _note_activity(self, models: set[str]) -> None:
         now = time.time()
         for mid in models:
-            self.activity.setdefault(mid, {})["last_activity"] = now
+            entry = self.activity.setdefault(mid, {})
+            prev = entry.get("last_activity")
+            if prev:
+                gaps = self._gaps.setdefault(mid, [])
+                gaps.append(now - prev)
+                del gaps[:-_MAX_GAP_SAMPLES]
+            entry["last_activity"] = now
+
+    def usage_forecast(self, model_id: str, ttl: int | None) -> dict | None:
+        """Predict whether ``model_id`` is likely to see more activity before
+        its TTL idles it out, from the trend of gaps between its own recent
+        requests — no local-model runtime forecasts its own TTL behavior.
+
+        Returns ``None`` without at least two recorded gaps or a configured
+        TTL: there isn't enough of this model's own history to say anything.
+        """
+        if not ttl:
+            return None
+        gaps = self._gaps.get(model_id)
+        if not gaps or len(gaps) < _MIN_GAP_SAMPLES_FOR_FORECAST:
+            return None
+        last_activity = self.activity.get(model_id, {}).get("last_activity")
+        if not last_activity:
+            return None
+        avg_gap = sum(gaps) / len(gaps)
+        elapsed = time.time() - last_activity
+        remaining = max(ttl - elapsed, 0.0)
+        return {
+            "avg_gap_seconds": avg_gap,
+            "remaining_ttl_seconds": remaining,
+            "likely_active_again": avg_gap < ttl,
+            "confidence": min(len(gaps) / _MAX_GAP_SAMPLES, 1.0),
+        }
 
     def _handle_log_line(self, line: str) -> None:
         if _RE_REQ.search(line):
@@ -150,6 +214,21 @@ class Telemetry:
                     a["tok_s"] = float(vals["predicted_tokens_seconds"])
                 if float(vals.get("prompt_tokens_seconds", 0)) > 0:
                     a["prompt_tok_s"] = float(vals["prompt_tokens_seconds"])
+                if self._usage_ledger is not None:
+                    self._usage_ledger.observe(
+                        mid,
+                        prompt_tokens_total=_int_metric(vals, "prompt_tokens_total"),
+                        tokens_predicted_total=_int_metric(vals, "tokens_predicted_total"),
+                        n_tokens_max=_int_metric(vals, "n_tokens_max"),
+                    )
+                if self._spec_decode_ledger is not None:
+                    self._spec_decode_ledger.observe(
+                        mid,
+                        draft_tokens_total=_int_metric(vals, "spec_decode_num_draft_tokens_total"),
+                        accepted_tokens_total=_int_metric(
+                            vals, "spec_decode_num_accepted_tokens_total"
+                        ),
+                    )
             except httpx.HTTPError:
                 continue
 

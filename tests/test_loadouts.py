@@ -4,6 +4,7 @@ from hearthia.loadouts import (
     loadout_cool,
     loadout_load,
     loadout_plan,
+    loadouts_affected_by_drift,
 )
 from hearthia.registry import Registry
 from hearthia.settings import LoadoutSettings, Settings
@@ -156,3 +157,36 @@ async def test_loadout_cool_preserves_members_shared_with_another_loadout(tmp_pa
     assert result["cooled"] == ["big-coder"]
     assert result["preserved_shared"] == [{"model": "tiny-embed", "loadouts": ["notes"]}]
     assert gw.cooled == ["big-coder"]
+
+
+def test_loadouts_affected_by_drift_only_returns_containing_loadouts(tmp_path):
+    s = _settings(
+        tmp_path,
+        {
+            "coding": LoadoutSettings(models=["big-coder", "tiny-embed"]),
+            "notes": LoadoutSettings(models=["tiny-embed"]),
+        },
+    )
+    affected = loadouts_affected_by_drift(s, _reg(tmp_path), "big-coder")
+    assert [a["loadout"] for a in affected] == ["coding"]
+    assert "fits" in affected[0]
+    assert "total_bytes" in affected[0]
+
+
+def test_loadouts_affected_by_drift_ignores_model_not_in_any_loadout(tmp_path):
+    s = _settings(tmp_path, _loadouts(["big-coder"]))
+    assert loadouts_affected_by_drift(s, _reg(tmp_path), "tiny-embed") == []
+
+
+def test_loadouts_affected_by_drift_reports_no_longer_fitting(tmp_path, monkeypatch):
+    monkeypatch.setattr("hearthia.budget.wired_limit_bytes", lambda total: 1)
+    s = _settings(tmp_path, _loadouts(["big-coder", "tiny-embed"]))
+    affected = loadouts_affected_by_drift(s, _reg(tmp_path), "big-coder")
+    assert affected == [
+        {
+            "loadout": "coding",
+            "fits": False,
+            "total_bytes": affected[0]["total_bytes"],
+            "wired_limit": 1,
+        }
+    ]

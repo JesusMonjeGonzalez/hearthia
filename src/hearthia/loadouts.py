@@ -24,6 +24,7 @@ from hearthia.budget import (
     profile_for,
     running_resident,
 )
+from hearthia.calibration import CalibrationStore
 from hearthia.gateway import Gateway
 from hearthia.registry import Model, Registry
 from hearthia.settings import Settings
@@ -104,23 +105,29 @@ async def loadout_plan(s: Settings, gw: Gateway, reg: Registry, name: str) -> di
     }
 
 
-async def loadout_load(s: Settings, gw: Gateway, reg: Registry, name: str) -> dict:
-    """Warm a loadout: whole-set check first, then budget-checked warms in order."""
-    cfg = get_loadout(s, name)
-    if cfg is None:
-        return {"ok": False, "error": f"loadout '{name}' is not defined in config.toml"}
+async def warm_model_ids(
+    s: Settings, gw: Gateway, reg: Registry, model_ids: list[str], label: str
+) -> dict:
+    """Whole-set budget check, then budget-checked warms in order.
 
+    Shared by declared loadouts (``loadout_load``) and ad-hoc sets (session
+    replay, ``sessions.py``) — the fit check and per-model warm sequence are
+    identical either way; only where the set of ids came from differs.
+    """
     models = reg.models()
     vm = psutil.virtual_memory()
     running = running_resident(await gw.running())
-    total, wired, fits = _set_totals(models, cfg["models"], running, vm.available)
+    total, wired, fits = _set_totals(models, model_ids, running, vm.available)
+    calibration = CalibrationStore(s.paths.calibration_file)
 
     if not fits:
-        advice = advise_fit(models, cfg["models"], running, vm.total, vm.available)
+        advice = advise_fit(
+            models, model_ids, running, vm.total, vm.available, calibration=calibration
+        )
         return {
             "ok": False,
             "error": (
-                f"loadout '{name}' does not fit the unified-memory budget: "
+                f"{label} does not fit the unified-memory budget: "
                 f"{total / 2**30:.1f} GiB needed, {wired / 2**30:.1f} GiB ceiling"
             ),
             "advice": advice,
@@ -129,12 +136,16 @@ async def loadout_load(s: Settings, gw: Gateway, reg: Registry, name: str) -> di
     warmed: list[str] = []
     skipped: list[str] = []
     refused: dict = {}
-    for mid in cfg["models"]:
+    for mid in model_ids:
         if mid in running:
             skipped.append(mid)
             continue
         decision = plan_warm_now(
-            reg.models(), mid, await gw.running(), mode=s.memory.mode if s.memory else "enforce"
+            reg.models(),
+            mid,
+            await gw.running(),
+            mode=s.memory.mode if s.memory else "enforce",
+            calibration=calibration,
         )
         if not decision.allowed:
             refused = {
@@ -153,11 +164,48 @@ async def loadout_load(s: Settings, gw: Gateway, reg: Registry, name: str) -> di
         warmed.append(mid)
     return {
         "ok": not refused,
-        "name": name,
         "warmed": warmed,
         "skipped": skipped,
         "refused": refused or None,
     }
+
+
+async def loadout_load(s: Settings, gw: Gateway, reg: Registry, name: str) -> dict:
+    """Warm a loadout: whole-set check first, then budget-checked warms in order."""
+    cfg = get_loadout(s, name)
+    if cfg is None:
+        return {"ok": False, "error": f"loadout '{name}' is not defined in config.toml"}
+
+    result = await warm_model_ids(s, gw, reg, cfg["models"], f"loadout '{name}'")
+    return {**result, "name": name}
+
+
+def loadouts_affected_by_drift(s: Settings, reg: Registry, model_id: str) -> list[dict]:
+    """Re-check every declared loadout containing ``model_id`` after its GGUF
+    changed on disk (``drift.py``), instead of waiting for the next
+    `hearth loadout load` to fail with a now-stale plan.
+
+    Pure planning against cold-state estimates (no gateway call, no
+    ``running`` state) — a lightweight sanity check triggered by drift, not
+    the authoritative pre-warm check ``loadout_load`` already performs.
+    """
+    vm = psutil.virtual_memory()
+    calibration = CalibrationStore(s.paths.calibration_file)
+    models = reg.models()
+    out: list[dict] = []
+    for loadout_name, cfg in defined_loadouts(s).items():
+        if model_id not in cfg["models"]:
+            continue
+        plan = plan_set(models, cfg["models"], vm.total, vm.available, calibration=calibration)
+        out.append(
+            {
+                "loadout": loadout_name,
+                "fits": plan["fits"],
+                "total_bytes": plan["total_bytes"],
+                "wired_limit": plan["wired_limit"],
+            }
+        )
+    return out
 
 
 async def loadout_cool(s: Settings, gw: Gateway, reg: Registry, name: str) -> dict:

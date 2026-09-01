@@ -17,8 +17,10 @@ from dataclasses import dataclass, field
 
 import psutil
 
+from hearthia.calibration import CalibrationStore
 from hearthia.gguf import RamProfile, model_ram_profile
 from hearthia.library import estimate_resident_ram, kv_cache_bytes
+from hearthia.power import PowerState, apply_to_ceiling
 from hearthia.registry import Model
 from hearthia.telemetry import wired_limit_bytes
 
@@ -61,8 +63,15 @@ def estimate_model_ram(
     model: Model,
     profile: RamProfile | None,
     ctx: int | None = None,
+    calibration: CalibrationStore | None = None,
 ) -> ModelEstimate:
-    """Resident-RAM estimate for one model at its configured context."""
+    """Resident-RAM estimate for one model at its configured context.
+
+    When ``calibration`` holds at least two real measurements for this exact
+    model, the header estimate is corrected by the learned factor between it
+    and observed RSS (see ``calibration.py``) — the estimate improves the
+    more this model has actually been run on this Mac.
+    """
     file_size = 0
     if model.file and model.file.exists():
         file_size = model.file.stat().st_size
@@ -88,6 +97,11 @@ def estimate_model_ram(
             f"weights {(file_size or profile.file_size) / 2**30:.1f} + "
             f"KV {kv / 2**30:.1f} GiB @ {ctx:,} tok ctx"
         )
+        if calibration is not None:
+            corrected = calibration.corrected_bytes(model.id, est)
+            if corrected != est:
+                detail += f" · calibrated {corrected / 2**30:.1f} GiB from measured runs"
+                est = corrected
         return ModelEstimate(model.id, est, True, detail)
 
     est = max(int(file_size * _FALLBACK_RATIO), file_size + _FALLBACK_MIN_OVERHEAD)
@@ -108,11 +122,15 @@ def plan_warm(
     ram_total: int,
     ram_available: int,
     mode: str = "enforce",
+    calibration: CalibrationStore | None = None,
+    power: PowerState | None = None,
 ) -> WarmDecision:
     """Compute the warm decision.
 
     ``running`` maps currently-resident model ids to measured RSS in bytes
-    (None when unmeasured — estimated from the file size instead).
+    (None when unmeasured — estimated from the file size instead). When
+    ``power`` reflects a constrained battery or thermal state, the wired
+    ceiling flexes down for this decision only (see ``power.py``).
     """
     by_id = {m.id: m for m in models}
     candidate = by_id.get(candidate_id)
@@ -122,6 +140,9 @@ def plan_warm(
         )
 
     wired = wired_limit_bytes(ram_total)
+    power_lines: list[str] = []
+    if power is not None:
+        wired, power_lines = apply_to_ceiling(wired, power)
 
     resident = 0
     resident_lines: list[str] = []
@@ -131,12 +152,12 @@ def plan_warm(
             resident += rss
             resident_lines.append(f"  running  {mid:24} {rss / 2**30:6.1f} GiB  measured")
         elif m is not None:
-            est = estimate_model_ram(m, profile_for(m))
+            est = estimate_model_ram(m, profile_for(m), calibration=calibration)
             resident += est.resident_bytes
             tag = "" if est.known else "  (guess)"
             resident_lines.append(f"  running  {mid:24} {est.resident_bytes / 2**30:6.1f} GiB{tag}")
 
-    est = estimate_model_ram(candidate, profile_for(candidate))
+    est = estimate_model_ram(candidate, profile_for(candidate), calibration=calibration)
     total = resident + est.resident_bytes
     fits = total < wired and total < ram_available
 
@@ -145,6 +166,7 @@ def plan_warm(
         f"  candidate {candidate_id:24} {est.resident_bytes / 2**30:6.1f} GiB"
         + ("" if est.known else "  (guess)"),
         *resident_lines,
+        *power_lines,
         f"  total     {total / 2**30:6.1f} GiB of "
         f"{wired / 2**30:.1f} GiB wired ceiling, {ram_available / 2**30:.1f} GiB available",
     ]
@@ -204,6 +226,7 @@ def plan_set(
     ram_total: int,
     ram_available: int,
     extra_ctx: int | None = None,
+    calibration: CalibrationStore | None = None,
 ) -> dict:
     """What-if: would this set of models co-resident fit the budget?
 
@@ -220,7 +243,7 @@ def plan_set(
         if m is None:
             lines.append({"id": mid, "error": "not in config"})
             continue
-        est = estimate_model_ram(m, profile_for(m), ctx=extra_ctx)
+        est = estimate_model_ram(m, profile_for(m), ctx=extra_ctx, calibration=calibration)
         total += est.resident_bytes
         if not est.known:
             unknown += 1
@@ -249,7 +272,12 @@ def running_resident(running_models: list[dict]) -> dict[str, int | None]:
 
 
 def plan_warm_now(
-    models: list[Model], candidate_id: str, running_models: list[dict], mode: str
+    models: list[Model],
+    candidate_id: str,
+    running_models: list[dict],
+    mode: str,
+    calibration: CalibrationStore | None = None,
+    power: PowerState | None = None,
 ) -> WarmDecision:
     vm = psutil.virtual_memory()
     return plan_warm(
@@ -259,17 +287,23 @@ def plan_warm_now(
         vm.total,
         vm.available,
         mode=mode,
+        calibration=calibration,
+        power=power,
     )
 
 
-def budget_summary(models: list[Model], running: dict[str, int | None]) -> dict:
+def budget_summary(
+    models: list[Model],
+    running: dict[str, int | None],
+    calibration: CalibrationStore | None = None,
+) -> dict:
     """Machine-readable snapshot of the memory budget for the dashboard."""
     vm = psutil.virtual_memory()
     wired = wired_limit_bytes(vm.total)
     resident = 0
     per_model: dict[str, dict] = {}
     for m in models:
-        est = estimate_model_ram(m, profile_for(m))
+        est = estimate_model_ram(m, profile_for(m), calibration=calibration)
         per_model[m.id] = {
             "est_resident": est.resident_bytes,
             "known": est.known,
@@ -321,7 +355,11 @@ def _ctx_variants(ctx: int | None) -> list[int]:
 
 
 def _variant_estimate(
-    model: Model, profile: RamProfile, ctx: int, cache_type: str
+    model: Model,
+    profile: RamProfile,
+    ctx: int,
+    cache_type: str,
+    calibration: CalibrationStore | None = None,
 ) -> ModelEstimate:
     file_size = model.file.stat().st_size if model.file and model.file.exists() else 0
     if not file_size:
@@ -339,11 +377,18 @@ def _variant_estimate(
         f"weights {file_size / 2**30:.1f} + KV {kv / 2**30:.1f} GiB "
         f"@ {ctx:,} tok ctx ({cache_type})"
     )
+    if calibration is not None:
+        corrected = calibration.corrected_bytes(model.id, est)
+        if corrected != est:
+            detail += " · calibrated"
+            est = corrected
     return ModelEstimate(model.id, est, True, detail)
 
 
 def _resident_lines(
-    by_id: dict[str, Model], running: dict[str, int | None]
+    by_id: dict[str, Model],
+    running: dict[str, int | None],
+    calibration: CalibrationStore | None = None,
 ) -> tuple[int, list[str]]:
     resident = 0
     lines: list[str] = []
@@ -353,7 +398,7 @@ def _resident_lines(
             resident += rss
             lines.append(f"  running  {mid:24} {rss / 2**30:6.1f} GiB  measured")
         elif m is not None:
-            est = estimate_model_ram(m, profile_for(m))
+            est = estimate_model_ram(m, profile_for(m), calibration=calibration)
             resident += est.resident_bytes
             tag = "" if est.known else "  (guess)"
             lines.append(f"  running  {mid:24} {est.resident_bytes / 2**30:6.1f} GiB{tag}")
@@ -366,6 +411,7 @@ def advise_fit(
     running: dict[str, int | None],
     ram_total: int,
     ram_available: int,
+    calibration: CalibrationStore | None = None,
 ) -> dict:
     """Enumerate the change-sets that make ``wanted_ids`` fit the budget.
 
@@ -373,11 +419,12 @@ def advise_fit(
     context (keeps precision), cooling a running model. Each warm option is a
     uniform target — one context and one KV cache type for the whole set — so
     the advice is a single pair of flags per model. Nothing is loaded or
-    unloaded: pure planning on the same header maths the budget gate enforces.
+    unloaded: pure planning on the same header maths the budget gate enforces,
+    corrected by ``calibration`` (see ``calibration.py``) when available.
     """
     by_id = {m.id: m for m in models}
     wired = wired_limit_bytes(ram_total)
-    resident, _ = _resident_lines(by_id, running)
+    resident, _ = _resident_lines(by_id, running, calibration=calibration)
 
     wanted = [mid for mid in wanted_ids if mid not in running]
     base: dict[str, ModelEstimate] = {}
@@ -387,7 +434,7 @@ def advise_fit(
         if m is None:
             continue
         profiles[mid] = profile_for(m)
-        base[mid] = estimate_model_ram(m, profiles[mid])
+        base[mid] = estimate_model_ram(m, profiles[mid], calibration=calibration)
     as_configured = resident + sum(e.resident_bytes for e in base.values())
     fits_now = as_configured < wired and as_configured < ram_available
 
@@ -417,7 +464,7 @@ def advise_fit(
                     if prof is None:
                         est = base[mid]  # unreadable header: nothing to vary
                     else:
-                        est = _variant_estimate(m, prof, ctx, ct)
+                        est = _variant_estimate(m, prof, ctx, ct, calibration=calibration)
                     total += est.resident_bytes
                     prev = base.get(mid)
                     if prev is not None and est.resident_bytes != prev.resident_bytes:
@@ -454,7 +501,11 @@ def advise_fit(
             free = rss
             if not free:
                 m = by_id.get(mid)
-                free = estimate_model_ram(m, profile_for(m)).resident_bytes if m else 0
+                free = (
+                    estimate_model_ram(m, profile_for(m), calibration=calibration).resident_bytes
+                    if m
+                    else 0
+                )
             if not free:
                 continue
             total = as_configured - free
@@ -481,3 +532,81 @@ def advise_fit(
         "ram_available": ram_available,
         "options": options,
     }
+
+
+# ── Context right-sizing advisor ─────────────────────────────────────────────
+#
+# advise_fit reacts to a set that does not fit. This looks the other way: a
+# model that has always fit could still be holding KV cache it never uses,
+# because --ctx-size is a ceiling picked in advance, not a measurement.
+# UsageLedger.max_context_observed (from llama.cpp's own n_tokens_max metric,
+# "high watermark of the context size observed") is the honest alternative
+# to guessing — no local-model runtime rightsizes context from real usage.
+
+_RIGHTSIZE_HEADROOM = 1.25  # keep 25% above the highest real prompt+completion seen
+_RIGHTSIZE_MIN_SAVINGS_BYTES = 256 * 1024**2  # not worth suggesting a trim this small
+
+
+@dataclass(frozen=True)
+class RightsizeAdvice:
+    model_id: str
+    configured_ctx: int
+    observed_max_ctx: int
+    suggested_ctx: int
+    freed_bytes: int
+
+
+def rightsizing_advice(
+    model: Model,
+    profile: RamProfile | None,
+    observed_max_ctx: int,
+) -> RightsizeAdvice | None:
+    """Suggest a lower ``--ctx-size`` from real observed usage.
+
+    Returns ``None`` when there isn't a usable profile or observation yet,
+    or when the model is already right-sized (the observed high-water mark
+    is close enough to the configured context that no ladder step is free).
+    """
+    if profile is None or observed_max_ctx <= 0:
+        return None
+    configured_ctx = model.ctx or profile.context_length
+    if not configured_ctx:
+        return None
+
+    needed = int(observed_max_ctx * _RIGHTSIZE_HEADROOM)
+    candidates = [c for c in _CTX_LADDER if c >= needed]
+    suggested = min(candidates) if candidates else _CTX_LADDER[-1]
+    suggested = min(suggested, configured_ctx)
+    if suggested >= configured_ctx:
+        return None
+
+    k_type, _v_type = _cache_types(model.cmd)
+    try:
+        kv_configured = kv_cache_bytes(
+            profile.n_layer,
+            profile.n_kv_heads,
+            profile.k_len,
+            profile.v_len,
+            configured_ctx,
+            cache_type=k_type,
+        )
+        kv_suggested = kv_cache_bytes(
+            profile.n_layer,
+            profile.n_kv_heads,
+            profile.k_len,
+            profile.v_len,
+            suggested,
+            cache_type=k_type,
+        )
+    except ValueError:
+        kv_configured = kv_cache_bytes(
+            profile.n_layer, profile.n_kv_heads, profile.k_len, profile.v_len, configured_ctx
+        )
+        kv_suggested = kv_cache_bytes(
+            profile.n_layer, profile.n_kv_heads, profile.k_len, profile.v_len, suggested
+        )
+
+    freed = kv_configured - kv_suggested
+    if freed < _RIGHTSIZE_MIN_SAVINGS_BYTES:
+        return None
+    return RightsizeAdvice(model.id, configured_ctx, observed_max_ctx, suggested, freed)

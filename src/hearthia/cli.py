@@ -11,6 +11,7 @@ import typer
 
 from hearthia import __version__
 from hearthia.budget import WarmDecision, plan_warm_now
+from hearthia.calibration import CalibrationStore
 from hearthia.demo import DEMO_PORT
 from hearthia.gateway import Gateway
 from hearthia.loadouts import loadout_load
@@ -33,6 +34,10 @@ STATE_WORDS = {"ready": "warm", "starting": "kindling", "stopping": "cooling"}
 
 def _registry(s: Settings) -> Registry:
     return Registry(s.paths.gateway_config, s.paths.backups_dir)
+
+
+def _calibration(s: Settings) -> CalibrationStore:
+    return CalibrationStore(s.paths.calibration_file)
 
 
 async def _states(gw: Gateway) -> dict[str, str]:
@@ -233,31 +238,50 @@ def models() -> None:
 def warm(
     model_id: str,
     force: bool = typer.Option(False, "--force", help="Warm even if the RAM budget says no."),
+    verify: bool = typer.Option(
+        False, "--verify", help="Fire a real canary completion after warming, not just HTTP health."
+    ),
 ) -> None:
     """Load a model into memory (kindling → warm), inside the RAM budget."""
-    s = Settings()
+    import time as _time
 
-    async def run() -> tuple[bool, "WarmDecision | None"]:
+    from hearthia.load_time import LoadTimeLedger
+
+    s = Settings()
+    load_times = LoadTimeLedger(s.paths.load_time_file)
+
+    async def run() -> tuple[bool, "WarmDecision | None", dict | None, float]:
         gw = Gateway(s.gateway.url)
+        started = _time.monotonic()
         try:
             running = await gw.running()
             if force:
-                return await gw.warm(model_id, timeout=s.gateway.health_timeout), None
+                ok = await gw.warm(model_id, timeout=s.gateway.health_timeout)
+                canary = await _maybe_verify(gw, model_id, ok, verify)
+                return ok, None, canary, _time.monotonic() - started
+            from hearthia.power import read_power_state
+
             decision = plan_warm_now(
                 _registry(s).models(),
                 model_id,
                 running,
                 mode=s.memory.mode if s.memory else "enforce",
+                calibration=_calibration(s),
+                power=read_power_state(),
             )
             if not decision.allowed:
-                return False, decision
+                return False, decision, None, 0.0
             ok = await gw.warm(model_id, timeout=s.gateway.health_timeout)
-            return ok, decision
+            canary = await _maybe_verify(gw, model_id, ok, verify)
+            return ok, decision, canary, _time.monotonic() - started
         finally:
             await gw.close()
 
-    typer.echo(f"kindling {model_id}…")
-    ok, decision = asyncio.run(run())
+    eta = load_times.eta(model_id)
+    typer.echo(f"kindling {model_id}…" + (f" (usually ~{eta:.0f}s)" if eta else ""))
+    ok, decision, canary, elapsed = asyncio.run(run())
+    if ok and elapsed > 0:
+        load_times.record(model_id, elapsed)
     if decision is not None:
         for line in decision.lines:
             typer.echo(line)
@@ -269,7 +293,93 @@ def warm(
         else:
             typer.echo(f"failed to warm {model_id} — is the gateway up? (hearth status)")
         raise typer.Exit(1)
-    typer.echo(f"{model_id} is warm")
+    typer.echo(f"{model_id} is warm (took {elapsed:.0f}s)")
+    if canary is not None:
+        if canary.get("ok"):
+            typer.echo(f"  shadow-eval canary: OK ({canary.get('text') or '…'!r})")
+        else:
+            typer.echo(
+                f"  shadow-eval canary FAILED: {canary.get('error') or 'empty completion'} "
+                "— the model is warm but may not actually be usable"
+            )
+            raise typer.Exit(1)
+
+
+async def _maybe_verify(gw: Gateway, model_id: str, warmed_ok: bool, verify: bool) -> dict | None:
+    if not verify or not warmed_ok:
+        return None
+    from hearthia.shadow_eval import canary_check
+
+    return await canary_check(gw, model_id)
+
+
+@app.command()
+def rehearse(
+    model_ids: Annotated[
+        list[str] | None,
+        typer.Argument(help="Specific model ids to rehearse (default: every registered model)."),
+    ] = None,
+) -> None:
+    """Warm, canary-check, and cool back down every model that was cold.
+
+    A whole-roster health check: catches a broken quant or chat template
+    before a user hits it. Never disturbs a model already warm. See
+    `rehearsal.py`.
+    """
+    from hearthia.rehearsal import rehearse as run_rehearsal
+
+    s = Settings()
+    all_models = _registry(s).models()
+    targets = [m for m in all_models if m.id in set(model_ids)] if model_ids else all_models
+    if not targets:
+        typer.echo("no matching models to rehearse")
+        raise typer.Exit(1)
+
+    async def run() -> list[dict]:
+        gw = Gateway(s.gateway.url)
+        try:
+            return await run_rehearsal(s, gw, targets, all_models=all_models)
+        finally:
+            await gw.close()
+
+    typer.echo(f"rehearsing {len(targets)} model(s)…")
+    results = asyncio.run(run())
+    failed = 0
+    for r in results:
+        if r["status"] == "ok":
+            typer.echo(f"  [OK]      {r['model_id']:28} {r['detail'] or ''!r}")
+        else:
+            failed += 1
+            typer.echo(f"  [{r['status'].upper()}]  {r['model_id']:28} {r['detail']}")
+    typer.echo(f"\n{len(results) - failed}/{len(results)} healthy")
+    if failed:
+        raise typer.Exit(1)
+
+
+@app.command()
+def verify(model_id: str) -> None:
+    """Fire a real canary completion at an already-warm model.
+
+    Confirms the model actually produces output, not just that its HTTP
+    health check passed — see `shadow_eval.py`.
+    """
+    from hearthia.shadow_eval import canary_check
+
+    s = Settings()
+
+    async def run() -> dict:
+        gw = Gateway(s.gateway.url)
+        try:
+            return await canary_check(gw, model_id)
+        finally:
+            await gw.close()
+
+    result = asyncio.run(run())
+    if result.get("ok"):
+        typer.echo(f"{model_id}: OK ({result.get('text') or '…'!r})")
+    else:
+        typer.echo(f"{model_id}: FAILED — {result.get('error') or 'empty completion'}")
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -293,6 +403,167 @@ def cool(
     if not asyncio.run(run()):
         raise typer.Exit(1)
     typer.echo("cooled everything" if all_models else f"{model_id} is cooling")
+
+
+sessions_app = typer.Typer(
+    name="sessions",
+    help="Past combinations of models that were warm together — replay one with one command.",
+    no_args_is_help=True,
+)
+app.add_typer(sessions_app, name="sessions")
+
+
+@sessions_app.command("list")
+def sessions_list() -> None:
+    """Recent stable combinations of models that were warm together."""
+    from hearthia.sessions import SessionHistory
+
+    s = Settings()
+    history = SessionHistory(s.paths.stack_dir / "sessions.json")
+    recent = history.recent()
+    if not recent:
+        typer.echo("no session history yet — it fills in as models stay warm together")
+        return
+    for i, session in enumerate(recent):
+        import datetime
+
+        started = datetime.datetime.fromtimestamp(session.started_at).strftime("%Y-%m-%d %H:%M")
+        minutes = session.duration_seconds / 60
+        typer.echo(f"  [{i}] {started}  ({minutes:.0f}m)  {', '.join(session.models)}")
+
+
+@sessions_app.command("replay")
+def sessions_replay(index: int = typer.Argument(0, help="0 = most recent session.")) -> None:
+    """Warm the exact model set from a past session (whole-set budget check first)."""
+    from hearthia.loadouts import warm_model_ids
+    from hearthia.sessions import SessionHistory
+
+    s = Settings()
+    history = SessionHistory(s.paths.stack_dir / "sessions.json")
+    recent = history.recent()
+    if index < 0 or index >= len(recent):
+        typer.echo(f"no session at index {index} — see `hearth sessions list`")
+        raise typer.Exit(1)
+    session = recent[index]
+    typer.echo(f"replaying session [{index}]: {', '.join(session.models)}")
+
+    async def run() -> dict:
+        gw = Gateway(s.gateway.url)
+        try:
+            return await warm_model_ids(s, gw, _registry(s), list(session.models), "session")
+        finally:
+            await gw.close()
+
+    result = asyncio.run(run())
+    if not result["ok"]:
+        typer.echo(result.get("error") or "session replay refused")
+        raise typer.Exit(1)
+    if result["warmed"]:
+        typer.echo(f"warmed: {', '.join(result['warmed'])}")
+    if result["skipped"]:
+        typer.echo(f"already warm: {', '.join(result['skipped'])}")
+
+
+@app.command()
+def storage() -> None:
+    """Disk footprint per model, flagging weights unused for 30+ days.
+
+    Cross-references real file sizes with when a model was last actually
+    warmed (tracked by the daemon) — not a guess, and complements `hearth
+    dedupe` for reclaiming space.
+    """
+    from hearthia.storage import LastUsedTracker, storage_report
+
+    s = Settings()
+    tracker = LastUsedTracker(s.paths.last_used_file)
+    reports = storage_report(_registry(s).models(), tracker)
+    if not reports:
+        typer.echo("no model weights found on disk")
+        return
+    for r in reports:
+        if r.days_since_seen is None:
+            age = "never observed warm"
+        else:
+            age = f"last warm {r.days_since_seen:.0f}d ago"
+        flag = "  <- stale, consider removing" if r.stale else ""
+        typer.echo(f"  {r.model_id:28} {r.size_bytes / 2**30:6.1f} GiB  {age}{flag}")
+    total = sum(r.size_bytes for r in reports)
+    typer.echo(f"\ntotal: {total / 2**30:.1f} GiB across {len(reports)} model(s)")
+
+
+@app.command()
+def dedupe(
+    path: Annotated[
+        list[Path], typer.Option("--path", help="Extra folder to scan (repeatable).")
+    ] = [],  # noqa: B006 — typer needs a literal default to build its own copy per invocation
+    link: bool = typer.Option(
+        False, "--link", help="Hardlink duplicates to reclaim disk space (same filesystem only)."
+    ),
+) -> None:
+    """Find byte-identical GGUFs across Ollama, LM Studio and Hearthia's own folder.
+
+    Reports wasted disk space by default; --link reclaims it with hardlinks.
+    No local-model runtime looks across other runtimes' folders for this.
+    """
+    from hearthia.dedupe import default_roots, find_duplicates, find_gguf_files, link_duplicates
+
+    roots = default_roots() + list(path)
+    files = find_gguf_files(roots)
+    if not files:
+        typer.echo("no .gguf files found under: " + ", ".join(str(r) for r in roots))
+        return
+    typer.echo(f"scanning {len(files)} GGUF file(s)…")
+    groups = find_duplicates(files)
+    if not groups:
+        typer.echo("no byte-identical duplicates found")
+        return
+
+    total_wasted = 0
+    for g in sorted(groups, key=lambda g: -g.wasted_bytes):
+        total_wasted += g.wasted_bytes
+        typer.echo(f"\n  {g.size / 2**30:.2f} GiB × {len(g.paths)} copies:")
+        for p in g.paths:
+            typer.echo(f"    {p}")
+        if link:
+            relinked, errors = link_duplicates(g)
+            for p in relinked:
+                typer.echo(f"    linked -> {p}")
+            for e in errors:
+                typer.echo(f"    failed: {e}")
+
+    typer.echo(
+        f"\ntotal wasted space: {total_wasted / 2**30:.2f} GiB across {len(groups)} group(s)"
+    )
+    if not link:
+        typer.echo("run again with --link to reclaim it (hardlinks, same filesystem only)")
+
+
+@app.command()
+def power() -> None:
+    """Battery and thermal state, and any RAM ceiling reduction it triggers.
+
+    A near-empty battery or an already-throttled SoC gets less headroom
+    from `hearth warm` — see `power.py`. No local-model runtime folds
+    either signal into how much RAM it is willing to commit.
+    """
+    from hearthia.power import budget_multiplier, read_power_state
+
+    state = read_power_state()
+    typer.echo(f"power source   {'battery' if state.on_battery else 'AC power'}")
+    if state.battery_percent is not None:
+        typer.echo(f"battery        {state.battery_percent}%")
+    if state.speed_limit_percent is not None:
+        typer.echo(
+            f"thermal        {'throttled' if state.thermal_throttled else 'nominal'} "
+            f"(CPU at {state.speed_limit_percent}% speed)"
+        )
+    factor, reasons = budget_multiplier(state)
+    if reasons:
+        for r in reasons:
+            typer.echo(f"  {r}")
+        typer.echo(f"effective RAM ceiling: {int(factor * 100)}% of normal")
+    else:
+        typer.echo("no RAM ceiling reduction — power state is nominal")
 
 
 @app.command()
@@ -334,6 +605,8 @@ def status() -> None:
                     extra = measured.get(m.get("model"), {})
                     m["rss"] = extra.get("rss") or m.get("rss")
                     m["tok_s"] = extra.get("tok_s") or m.get("tok_s")
+                    m["last_activity"] = extra.get("last_activity") or m.get("last_activity")
+                    m["forecast"] = extra.get("forecast")
             except (_httpx.HTTPError, ValueError):
                 pass  # daemon down: /running alone still answers
             return True, running
@@ -360,6 +633,9 @@ def status() -> None:
             left = ttl - (_time.time() - last)
             if left > 0:
                 bits.append(f"unloads in {int(left // 60)}m{int(left % 60):02d}s")
+        forecast = m.get("forecast")
+        if forecast and forecast.get("likely_active_again"):
+            bits.append("likely active again before then")
         typer.echo(f"  {mid:28} {' · '.join(bits)}")
 
     typer.echo(f"memory    {(vm.total - vm.available) / 2**30:.1f} / {vm.total / 2**30:.0f} GiB")
@@ -369,7 +645,8 @@ def status() -> None:
         import httpx as _httpx
 
         r = _httpx.get(f"http://{s.daemon.bind}:{s.daemon.port}/api/status", timeout=1.5)
-        sysd = r.json().get("system", {})
+        payload = r.json()
+        sysd = payload.get("system", {})
         wired = sysd.get("wired_limit")
         committed = sum(m.get("rss") or 0 for m in running)
         if wired:
@@ -377,6 +654,8 @@ def status() -> None:
                 f"budget    {committed / 2**30:.1f} GiB committed "
                 f"of {wired / 2**30:.0f} GiB wired ceiling"
             )
+        if payload.get("sleep_prevented"):
+            typer.echo("sleep     prevented (caffeinate) while a model is warm")
     except (_httpx.HTTPError, ValueError):
         pass
 
@@ -648,6 +927,7 @@ def est(
         psutil.virtual_memory().total,
         psutil.virtual_memory().available,
         extra_ctx=ctx or None,
+        calibration=_calibration(s),
     )
     if as_json:
         import json
@@ -704,11 +984,13 @@ def advise(
                 running_resident(await gw.running()),
                 psutil.virtual_memory().total,
                 psutil.virtual_memory().available,
+                calibration=_calibration(s),
             ), plan_set(
                 reg.models(),
                 list(model_ids),
                 psutil.virtual_memory().total,
                 psutil.virtual_memory().available,
+                calibration=_calibration(s),
             )
         finally:
             await gw.close()
@@ -754,6 +1036,138 @@ def advise(
         for line in o.lines:
             typer.echo(line)
     typer.echo("nothing was loaded — apply a change-set to the model's cmd and restart the gateway")
+
+
+@app.command()
+def usage() -> None:
+    """Real lifetime token counts per model, from llama.cpp's own metrics.
+
+    Requires the model's `cmd` to include `--metrics` and the daemon to have
+    been running while it served requests — this is measured, not estimated.
+    """
+    from hearthia.usage_ledger import UsageLedger
+
+    s = Settings()
+    ledger = UsageLedger(s.paths.usage_ledger_file)
+    snapshot = ledger.snapshot()
+    if not snapshot:
+        typer.echo(
+            "no usage data yet — needs `--metrics` on the model's cmd and the "
+            "daemon running while it serves requests"
+        )
+        return
+    for mid, data in sorted(snapshot.items()):
+        typer.echo(
+            f"  {mid:28} {data['prompt_tokens']:>12,} prompt · "
+            f"{data['completion_tokens']:>12,} generated · "
+            f"max ctx seen {data['max_context_observed']:,}"
+        )
+
+
+@app.command("spec-decode")
+def spec_decode_cmd() -> None:
+    """Speculative-decoding acceptance rate per model using a draft model.
+
+    A low acceptance rate means the draft model's compute cost is very
+    likely not paid back by the tokens it saves — no local-model runtime
+    surfaces this ratio anywhere.
+    """
+    from hearthia.spec_decode import SpecDecodeLedger
+
+    s = Settings()
+    ledger = SpecDecodeLedger(s.paths.spec_decode_file)
+    snapshot = ledger.snapshot()
+    if not snapshot:
+        typer.echo(
+            "no speculative-decoding data yet — only models configured with a "
+            "draft model report these counters"
+        )
+        return
+    for mid in sorted(snapshot):
+        entry = ledger.entry(mid)
+        if entry is None:
+            continue
+        rate = entry.acceptance_rate
+        if rate is None:
+            typer.echo(f"  {mid:28} {entry.draft_tokens:>10,} draft tokens — not enough data yet")
+            continue
+        flag = "  <- consider dropping --spec-draft-model" if entry.underperforming else ""
+        typer.echo(f"  {mid:28} {rate * 100:5.1f}% accepted{flag}")
+
+
+@app.command()
+def rightsize() -> None:
+    """Suggest a lower --ctx-size for models from their real observed usage.
+
+    Uses llama.cpp's `n_tokens_max` metric (high-water mark of context
+    actually used) — no local-model runtime rightsizes context this way.
+    """
+    from hearthia.budget import profile_for, rightsizing_advice
+    from hearthia.usage_ledger import UsageLedger
+
+    s = Settings()
+    ledger = UsageLedger(s.paths.usage_ledger_file)
+    suggestions = []
+    for model in _registry(s).models():
+        entry = ledger.entry(model.id)
+        if entry is None:
+            continue
+        advice = rightsizing_advice(model, profile_for(model), entry.max_context_observed)
+        if advice is not None:
+            suggestions.append(advice)
+
+    if not suggestions:
+        typer.echo("no right-sizing suggestions — needs usage data (see `hearth usage`)")
+        return
+    for a in suggestions:
+        typer.echo(
+            f"  {a.model_id:28} configured {a.configured_ctx:,} tok, "
+            f"observed max {a.observed_max_ctx:,} tok "
+            f"-> try --ctx-size {a.suggested_ctx:,} "
+            f"(frees {a.freed_bytes / 2**30:.2f} GiB)"
+        )
+
+
+@app.command()
+def calibration(
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable output for scripts.")
+    ] = False,
+) -> None:
+    """Show learned RAM-estimate corrections from real measured warms.
+
+    Hearthia's RAM budget starts from GGUF-header arithmetic, then folds in
+    what it actually measures each time a model stays warm — a self-tending
+    correction no other local-model runtime keeps. Empty until models have
+    been warmed at least twice with `hearth warm` or the dashboard.
+    """
+    s = Settings()
+    store = _calibration(s)
+    snapshot = store.snapshot()
+
+    if as_json:
+        import json
+
+        typer.echo(json.dumps(snapshot))
+        return
+
+    if not snapshot:
+        typer.echo("no calibration data yet — warm a model twice to start learning its footprint")
+        return
+
+    for mid, data in sorted(snapshot.items()):
+        ratio = data["ratio"]
+        if ratio > 1.02:
+            tag = "under-estimated"
+        elif ratio < 0.98:
+            tag = "over-estimated"
+        else:
+            tag = "accurate"
+        typer.echo(
+            f"  {mid:28} x{ratio:.2f}  ({data['samples']} sample(s), header {tag})  "
+            f"last measured {data['last_measured'] / 2**30:.1f} GiB "
+            f"vs estimated {data['last_estimated'] / 2**30:.1f} GiB"
+        )
 
 
 def _plan_lines(plan: dict) -> list[str]:
@@ -812,6 +1226,41 @@ def gguf_info(
     typer.echo(f"  {est.detail}")
     typer.echo(f"  KV cost per 1K tokens : {per_1k / 2**20:.1f} MiB")
     typer.echo(f"  resident estimate     : {est.resident_bytes / 2**30:.1f} GiB")
+
+    from hearthia.provenance import read_provenance
+
+    prov = read_provenance(gguf_file)
+    if prov.summary_lines():
+        typer.echo("  --- provenance (from the GGUF header) ---")
+        for line in prov.summary_lines():
+            typer.echo(line)
+
+
+@app.command()
+def provenance(model_id: str) -> None:
+    """License and lineage read from a registered model's GGUF header.
+
+    Only reports what the source model card actually preserved through
+    quantization — no network access, no assumptions when a field is absent.
+    """
+    from hearthia.provenance import read_provenance
+
+    s = Settings()
+    model = next((m for m in _registry(s).models() if m.id == model_id), None)
+    if model is None:
+        typer.echo(f"unknown model: {model_id}")
+        raise typer.Exit(1)
+    if not model.file or not model.file.exists():
+        typer.echo(f"weights file not found for {model_id}")
+        raise typer.Exit(1)
+
+    prov = read_provenance(model.file)
+    if not prov.summary_lines():
+        typer.echo(f"{model_id}: no provenance metadata in the GGUF header")
+        return
+    typer.echo(model_id)
+    for line in prov.summary_lines():
+        typer.echo(line)
 
 
 def _model_like(path: Path, ctx: int | None, cache: str):
@@ -980,6 +1429,29 @@ def mcp() -> None:
 
 
 @app.command()
+def lint() -> None:
+    """Sanity-check llama-swap.yaml against real GGUF headers.
+
+    Catches --ctx-size exceeding a model's trained context, alias
+    collisions, and loadout/lifecycle rules pointing at unknown models — the
+    kind of mistake that otherwise only surfaces as a confusing runtime
+    failure. See `lint.py`.
+    """
+    from hearthia.lint import lint as run_lint
+
+    s = Settings()
+    issues = run_lint(s, _registry(s))
+    if not issues:
+        typer.echo("no issues found")
+        return
+    for issue in issues:
+        tag = "WARN" if issue.severity == "warn" else "INFO"
+        typer.echo(f"  [{tag}]  {issue.message}")
+    if any(i.severity == "warn" for i in issues):
+        raise typer.Exit(1)
+
+
+@app.command()
 def doctor() -> None:
     """Check: llama.cpp present, ports free, wired limit, config valid, disk space."""
     import shutil
@@ -1048,6 +1520,19 @@ def doctor() -> None:
         except httpx.HTTPError:
             typer.echo(f"  [FAIL]  {name:<12} unavailable at {url}")
             ok = False
+
+    try:
+        r = httpx.get(f"http://{s.daemon.bind}:{s.daemon.port}/api/drift-warnings", timeout=2)
+        warnings = r.json().get("warnings", []) if r.status_code == 200 else []
+        for w in warnings:
+            typer.echo(
+                f"  [WARN]  loadout '{w['loadout']}' no longer fits after "
+                f"{w['model_id']} changed on disk "
+                f"({w['total_bytes'] / 2**30:.1f} GiB needed, "
+                f"{w['wired_limit'] / 2**30:.1f} GiB ceiling) — hearth advise {w['model_id']}"
+            )
+    except (httpx.HTTPError, ValueError, KeyError):
+        pass  # daemon down or too old to expose this — not a doctor failure on its own
 
     if ok:
         typer.echo("hearth is healthy.")
@@ -1143,6 +1628,18 @@ def pull(
                 raise typer.Exit(1)
             models_dir.mkdir(parents=True, exist_ok=True)
             dest = models_dir / Path(target.path).name
+
+            import shutil
+
+            free = shutil.disk_usage(str(models_dir)).free
+            if free < target.size:
+                typer.echo(
+                    f"not enough disk space: {target.path} needs "
+                    f"{target.size / 2**30:.1f} GiB, only {free / 2**30:.1f} GiB free "
+                    f"at {models_dir} — see `hearth storage` / `hearth dedupe` to reclaim some"
+                )
+                raise typer.Exit(1)
+
             typer.echo(f"pulling {target.path} ({target.size / 2**30:.1f} GiB)…")
 
             import sys

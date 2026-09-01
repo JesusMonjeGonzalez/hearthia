@@ -7,6 +7,7 @@ import time
 
 import psutil
 
+from hearthia.calibration import CalibrationStore
 from hearthia.gateway import Gateway
 from hearthia.registry import Registry
 from hearthia.telemetry import Telemetry
@@ -51,12 +52,14 @@ class LifecycleEngine:
         telemetry: Telemetry,
         rules: dict[str, str],
         memory_mode: str = "enforce",
+        calibration: CalibrationStore | None = None,
     ) -> None:
         self._gw = gw
         self._reg = reg
         self._tel = telemetry
         self._rules = rules
         self._memory_mode = memory_mode
+        self._calibration = calibration
         self._loading: set[str] = set()
         self._prev_role_alive: dict[str, bool] = {}
         self._role_died_at: dict[str, float] = {}
@@ -82,7 +85,11 @@ class LifecycleEngine:
                 from hearthia.budget import plan_warm_now
 
                 decision = plan_warm_now(
-                    self._reg.models(), mid, await self._gw.running(), mode=self._memory_mode
+                    self._reg.models(),
+                    mid,
+                    await self._gw.running(),
+                    mode=self._memory_mode,
+                    calibration=self._calibration,
                 )
                 if not decision.allowed:
                     log.warning(

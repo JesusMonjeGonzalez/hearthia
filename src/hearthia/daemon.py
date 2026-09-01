@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -10,11 +11,18 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from hearthia.api import brain, chat, config, context, library, logs, models, treepact
+from hearthia.calibration import CalibrationRecorder, CalibrationStore
+from hearthia.drift import DriftTracker
 from hearthia.gateway import Gateway
 from hearthia.lifecycle import LifecycleEngine
 from hearthia.registry import Registry
+from hearthia.sessions import SessionHistory
 from hearthia.settings import Settings
+from hearthia.sleep_guard import SleepGuard
+from hearthia.spec_decode import SpecDecodeLedger
+from hearthia.storage import LastUsedTracker
 from hearthia.telemetry import Telemetry
+from hearthia.usage_ledger import UsageLedger
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -45,8 +53,52 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     gw = Gateway(settings.gateway.url)
     reg = Registry(settings.paths.gateway_config, settings.paths.backups_dir)
-    tel = Telemetry(gw)
-    engine = LifecycleEngine(gw, reg, tel, settings.lifecycle, memory_mode=settings.memory.mode)
+    usage_ledger = UsageLedger(settings.paths.usage_ledger_file)
+    spec_decode_ledger = SpecDecodeLedger(settings.paths.spec_decode_file)
+    tel = Telemetry(gw, usage_ledger=usage_ledger, spec_decode_ledger=spec_decode_ledger)
+    calibration = CalibrationStore(settings.paths.calibration_file)
+    drift = DriftTracker(settings.paths.stack_dir / "model_fingerprints.json")
+    drift_warnings: list[dict] = []
+
+    def _on_drift(model_id: str) -> None:
+        from hearthia.loadouts import loadouts_affected_by_drift
+
+        for result in loadouts_affected_by_drift(settings, reg, model_id):
+            if result["fits"]:
+                continue
+            log.warning(
+                "loadout '%s' no longer fits the RAM budget after %s changed on disk",
+                result["loadout"],
+                model_id,
+            )
+            drift_warnings.append({**result, "model_id": model_id, "detected_at": time.time()})
+            del drift_warnings[:-20]
+
+    calibration_recorder = CalibrationRecorder(reg, calibration, drift=drift, on_drift=_on_drift)
+    sessions = SessionHistory(settings.paths.stack_dir / "sessions.json")
+    sleep_guard = SleepGuard()
+    last_used = LastUsedTracker(settings.paths.last_used_file)
+
+    async def _run_session_observer(interval: float = 15.0) -> None:
+        while True:
+            try:
+                running = await gw.running()
+                running_ids = {m.get("model", "") for m in running if m.get("model")}
+                sessions.observe(running_ids)
+                sleep_guard.sync(bool(running_ids))
+                last_used.touch(running_ids)
+            except Exception as e:  # noqa: BLE001 — a poll failure must not kill the loop
+                log.debug("session observer tick failed: %s", e)
+            await asyncio.sleep(interval)
+
+    engine = LifecycleEngine(
+        gw,
+        reg,
+        tel,
+        settings.lifecycle,
+        memory_mode=settings.memory.mode,
+        calibration=calibration,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -54,6 +106,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             asyncio.create_task(tel.run_event_watcher()),
             asyncio.create_task(tel.run_metrics_poller()),
             asyncio.create_task(engine.run()),
+            asyncio.create_task(calibration_recorder.run()),
+            asyncio.create_task(_run_session_observer()),
         ]
         log.info(
             "hearthd up — gateway %s, memory mode %s",
@@ -66,6 +120,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for t in tasks:
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            sleep_guard.stop()
             await gw.close()
             log.info("hearthd stopped")
 
@@ -74,6 +129,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.registry = reg
     app.state.telemetry = tel
     app.state.settings = settings
+    app.state.calibration = calibration
+    app.state.drift_warnings = drift_warnings
+    app.state.sessions = sessions
+    app.state.usage_ledger = usage_ledger
+    app.state.spec_decode_ledger = spec_decode_ledger
+    app.state.sleep_guard = sleep_guard
+    app.state.last_used = last_used
 
     allowed_origins = {
         f"http://{settings.daemon.bind}:{settings.daemon.port}",

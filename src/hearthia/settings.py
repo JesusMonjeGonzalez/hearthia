@@ -36,6 +36,26 @@ class PathsSettings(BaseModel):
     def backups_dir(self) -> Path:
         return self.stack_dir / "backups"
 
+    @property
+    def calibration_file(self) -> Path:
+        return self.stack_dir / "calibration.json"
+
+    @property
+    def usage_ledger_file(self) -> Path:
+        return self.stack_dir / "usage.json"
+
+    @property
+    def spec_decode_file(self) -> Path:
+        return self.stack_dir / "spec_decode.json"
+
+    @property
+    def load_time_file(self) -> Path:
+        return self.stack_dir / "load_times.json"
+
+    @property
+    def last_used_file(self) -> Path:
+        return self.stack_dir / "last_used.json"
+
 
 class GatewaySettings(BaseModel):
     port: int = 9292
