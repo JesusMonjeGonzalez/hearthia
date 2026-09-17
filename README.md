@@ -160,6 +160,8 @@ uv run scripts/benchmark.py
 - **Sleep prevention while warm:** holds a standard `caffeinate` process for as long as any model is warm.
 - **Storage hygiene advisor:** `hearth storage` flags model weights unused for 30+ days.
 - **Fleet health rehearsal:** `hearth rehearse` canary-checks every cold model, then cools it back down.
+- **Log workbench:** filter lines, pause the view while the stream keeps buffering,
+  and export the visible text locally. History is bounded to the latest 200,000 characters.
 
 ## Architecture
 

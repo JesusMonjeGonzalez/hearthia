@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+
+- **Log workbench:** the Logs tab can filter lines, pause the view while the
+  stream keeps buffering, and export the visible text locally; history is
+  bounded to the latest 200,000 characters.
+
 ### Fixed
 
 - Log streaming rejects gateway HTTP errors instead of displaying their response

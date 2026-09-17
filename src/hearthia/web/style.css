@@ -396,7 +396,9 @@ details.reasoning .rbody { color: var(--dim); font-size: 12.5px; white-space: pr
 }
 
 /* ── logs ── */
-.logs-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.logs-toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+.logs-toolbar .hint { flex: 1 1 240px; }
+#logs-search { flex: 1 1 180px; min-width: 0; }
 #log-view {
   background: #0c0a08; border: 1px solid var(--line); border-radius: 10px;
   padding: 14px; height: calc(100vh - 250px); overflow: auto;
