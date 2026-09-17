@@ -1,6 +1,7 @@
 import json
 
 import httpx
+import pytest
 import respx
 from fastapi import FastAPI
 from httpx import ASGITransport
@@ -230,6 +231,20 @@ async def test_logs_stream(config_path, backups_dir):
     body = b"".join([chunk async for chunk in r.aiter_bytes()])
     assert b"line1" in body
     await app.state.gateway.close()
+
+
+@pytest.mark.parametrize("status_code", [404, 503])
+@respx.mock
+async def test_logs_stream_http_error(config_path, backups_dir, status_code):
+    respx.get(f"{BASE}/logs/stream").respond(status_code, text="<html>upstream error</html>")
+    app = _app(config_path, backups_dir)
+    try:
+        async with await _client(app) as client:
+            response = await client.get("/api/logs/stream")
+        assert response.status_code == 200
+        assert response.text == "[llama-swap not reachable]\n"
+    finally:
+        await app.state.gateway.close()
 
 
 @respx.mock

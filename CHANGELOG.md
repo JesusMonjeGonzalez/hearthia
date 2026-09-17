@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Log streaming rejects gateway HTTP errors instead of displaying their response
+  bodies as log lines; the dashboard shows the existing unavailable-gateway notice.
+
 ## 0.5.0 — 2026-09-01
 
 ### Added
