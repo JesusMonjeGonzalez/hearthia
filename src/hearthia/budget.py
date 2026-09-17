@@ -318,11 +318,24 @@ def running_resident(running_models: list[dict]) -> dict[str, int | None]:
 def plan_warm_now(
     models: list[Model],
     candidate_id: str,
-    running_models: list[dict],
+    running_models: list[dict] | None,
     mode: str,
     calibration: CalibrationStore | None = None,
     power: PowerState | None = None,
 ) -> WarmDecision:
+    """Decide a warm against live memory. ``running_models`` may be ``None``
+    when the gateway inventory could not be read (see ``Gateway.inventory``);
+    an unknown inventory is refused in enforce mode rather than assumed empty.
+    """
+    if running_models is None:
+        reason = (
+            f"{candidate_id}: the gateway inventory is unavailable, so what is "
+            "already resident is unknown. Check the gateway, then retry."
+        )
+        if mode == "enforce":
+            log.warning("warm blocked: %s", reason)
+            return WarmDecision(candidate_id, False, blocked_reason=reason, lines=[f"  {reason}"])
+        return WarmDecision(candidate_id, True, warning=reason, lines=[f"  {reason}"])
     vm = psutil.virtual_memory()
     return plan_warm(
         models,

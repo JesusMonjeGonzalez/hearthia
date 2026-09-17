@@ -19,6 +19,10 @@
   bodies as log lines; the dashboard shows the existing unavailable-gateway notice.
 - Warm-gate refusals now quote the binding memory ceiling — the lower of the
   wired limit and available RAM — instead of the larger of the two.
+- The warm gate no longer reads an unreachable gateway as an empty machine:
+  when the inventory cannot be read, `memory.mode: enforce` refuses the warm
+  (warn mode proceeds with a warning) instead of stacking a load on top of
+  models that may still be resident.
 
 ## 0.5.0 — 2026-09-01
 

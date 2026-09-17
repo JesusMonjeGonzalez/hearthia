@@ -242,6 +242,16 @@ def test_plan_warm_unknown_candidate_is_allowed(tmp_path):
     assert d.allowed is True
 
 
+def test_plan_warm_now_refuses_when_the_inventory_is_unknown():
+    from hearthia.budget import plan_warm_now
+
+    blocked = plan_warm_now([_model("big")], "big", None, mode="enforce")
+    assert blocked.allowed is False
+    assert "inventory is unavailable" in blocked.blocked_reason
+    warned = plan_warm_now([_model("big")], "big", None, mode="warn")
+    assert warned.allowed is True and "inventory is unavailable" in warned.warning
+
+
 def test_model_estimate_dataclass_shapes():
     e = ModelEstimate("x", 123, True, "detail")
     assert replace(e, resident_bytes=456).resident_bytes == 456

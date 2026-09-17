@@ -87,7 +87,7 @@ class LifecycleEngine:
                 decision = plan_warm_now(
                     self._reg.models(),
                     mid,
-                    await self._gw.running(),
+                    await self._gw.inventory(),
                     mode=self._memory_mode,
                     calibration=self._calibration,
                 )

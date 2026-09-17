@@ -254,7 +254,7 @@ def warm(
         gw = Gateway(s.gateway.url)
         started = _time.monotonic()
         try:
-            running = await gw.running()
+            running = await gw.inventory()
             if force:
                 ok = await gw.warm(model_id, timeout=s.gateway.health_timeout)
                 canary = await _maybe_verify(gw, model_id, ok, verify)

@@ -244,7 +244,7 @@ class DemoGateway(Gateway):
     async def is_up(self) -> bool:
         return True
 
-    async def running(self) -> list[dict]:
+    async def inventory(self) -> list[dict]:
         return [dict(v) for v in self._running.values()]
 
     async def warm(self, model_id: str, timeout: float = 300.0) -> bool:

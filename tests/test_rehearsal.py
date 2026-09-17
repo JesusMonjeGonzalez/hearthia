@@ -13,6 +13,9 @@ class StubGateway:
     async def running(self):
         return self.running_list
 
+    async def inventory(self):
+        return self.running_list
+
     async def warm(self, model_id: str, timeout: float = 300.0) -> bool:
         self.warmed.append(model_id)
         self.running_list = [*self.running_list, {"model": model_id, "state": "ready"}]

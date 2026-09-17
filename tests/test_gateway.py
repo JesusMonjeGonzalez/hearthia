@@ -180,3 +180,25 @@ async def test_chat_stream_yields_bytes():
     assert route.called
     assert b"".join(chunks) == b"data: chunk1\n\ndata: chunk2\n\n"
     await gw.close()
+
+
+@respx.mock
+async def test_inventory_separates_empty_from_unreadable():
+    gw = Gateway(BASE)
+    route = respx.get(f"{BASE}/running")
+
+    route.respond(200, json={"running": []})
+    assert await gw.inventory() == []
+
+    # Every unreadable case must be None, so the memory gate can refuse rather
+    # than assume the machine is empty; running() keeps its display contract.
+    for failure in (
+        lambda: route.mock(side_effect=httpx.ConnectError("down")),
+        lambda: route.respond(503),
+        lambda: route.respond(200, text="not json"),
+        lambda: route.respond(200, json={"running": "not a list"}),
+    ):
+        failure()
+        assert await gw.inventory() is None
+        assert await gw.running() == []
+    await gw.close()
