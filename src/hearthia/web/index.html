@@ -152,9 +152,13 @@
   <section id="tab-logs" class="panel">
     <div class="logs-toolbar">
       <span class="hint">Live stream from llama-swap and every model server it runs.</span>
+      <input id="logs-search" type="search" placeholder="Filter log lines…" aria-label="Filter log lines">
+      <button id="logs-pause" class="btn btn-quiet" aria-pressed="false">Pause view</button>
+      <button id="logs-export" class="btn btn-quiet">Export view</button>
       <button id="logs-clear" class="btn btn-quiet">Clear view</button>
     </div>
-    <pre id="log-view"></pre>
+    <p id="logs-status" class="hint" role="status">Connecting…</p>
+    <pre id="log-view" tabindex="0" aria-label="Gateway logs"></pre>
   </section>
 
   <section id="tab-treepact" class="panel">
