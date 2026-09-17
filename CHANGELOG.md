@@ -7,6 +7,11 @@
 - **Log workbench:** the Logs tab can filter lines, pause the view while the
   stream keeps buffering, and export the visible text locally; history is
   bounded to the latest 200,000 characters.
+- **Hybrid-attention RAM accounting:** Qwen3.5/3.8-style models now count a KV
+  cache on only their full-attention layers plus a fixed recurrent state, and
+  the warm gate, `hearth gguf` and the rightsize advisor also count the vision
+  projector, draft model and prompt-cache ceiling. Plain attention models read
+  exactly as before.
 
 ### Fixed
 

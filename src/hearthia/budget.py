@@ -14,12 +14,17 @@ gate exists so that incident cannot repeat silently.
 import logging
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import psutil
 
 from hearthia.calibration import CalibrationStore
 from hearthia.gguf import RamProfile, model_ram_profile
-from hearthia.library import estimate_resident_ram, kv_cache_bytes
+from hearthia.library import (
+    attention_layers,
+    context_bytes,
+    estimate_resident_ram,
+)
 from hearthia.power import PowerState, apply_to_ceiling
 from hearthia.registry import Model
 from hearthia.telemetry import wired_limit_bytes
@@ -27,6 +32,11 @@ from hearthia.telemetry import wired_limit_bytes
 log = logging.getLogger("hearthia.budget")
 
 _RE_CACHE_TYPE = re.compile(r"--cache-type-(k|v)(?:\s+|=)(\S+)")
+_RE_SIDECAR_FILES = (
+    ("projector", re.compile(r"--mmproj(?:\s+|=)(\S+)")),
+    ("draft model", re.compile(r"(?:-md|--model-draft)(?:\s+|=)(\S+)")),
+)
+_RE_CACHE_RAM = re.compile(r"--cache-ram(?:\s+|=)(-?\d+)")
 
 # Without a header we fall back to file size + a generous compute/KV margin.
 _FALLBACK_RATIO = 1.3
@@ -59,6 +69,38 @@ def _cache_types(cmd: str) -> tuple[str, str]:
     return found.get("k", "q8_0"), found.get("v", "q8_0")
 
 
+def _sidecar_bytes(cmd: str) -> tuple[int, str]:
+    """Resident bytes llama-server holds beyond the weights file and KV cache.
+
+    Covers extra weight files loaded alongside the model — the multimodal
+    projector and a speculative-decoding draft model — and the prompt-cache
+    ceiling set with ``--cache-ram`` (MiB; ``-1`` means unbounded, which cannot
+    be budgeted and is reported instead of silently ignored). The draft model's
+    own KV cache is not modelled, so this stays a floor for spec-decode profiles.
+    """
+    total = 0
+    detail = ""
+    for label, pattern in _RE_SIDECAR_FILES:
+        match = pattern.search(cmd or "")
+        if not match:
+            continue
+        path = Path(match.group(1))
+        if path.exists():
+            total += path.stat().st_size
+            detail += f" + {label} {path.stat().st_size / 2**30:.1f} GiB"
+        else:
+            detail += f" + {label} (file missing)"
+    match = _RE_CACHE_RAM.search(cmd or "")
+    if match:
+        cache_mib = int(match.group(1))
+        if cache_mib > 0:
+            total += cache_mib * 1024**2
+            detail += f" + prompt cache {cache_mib} MiB"
+        else:
+            detail += " + prompt cache unbounded"
+    return total, detail
+
+
 def estimate_model_ram(
     model: Model,
     profile: RamProfile | None,
@@ -78,25 +120,25 @@ def estimate_model_ram(
 
     if profile is not None:
         ctx = ctx or model.ctx or profile.context_length
-        k_type, _v_type = _cache_types(model.cmd)
-        try:
-            kv = kv_cache_bytes(
-                profile.n_layer,
-                profile.n_kv_heads,
-                profile.k_len,
-                profile.v_len,
-                ctx,
-                cache_type=k_type,
-            )
-        except ValueError:
-            kv = kv_cache_bytes(
-                profile.n_layer, profile.n_kv_heads, profile.k_len, profile.v_len, ctx
-            )
-        est = estimate_resident_ram(file_size or profile.file_size, kv)
-        detail = (
-            f"weights {(file_size or profile.file_size) / 2**30:.1f} + "
-            f"KV {kv / 2**30:.1f} GiB @ {ctx:,} tok ctx"
+        k_type, v_type = _cache_types(model.cmd)
+        # Hybrid models cache on a fraction of their layers; the rest hold a
+        # fixed recurrent state instead (see library.attention_layers).
+        cached_layers = attention_layers(
+            profile.n_layer, profile.full_attention_interval, profile.nextn_layers
         )
+        kv, recurrent = context_bytes(profile, ctx, k_type, v_type)
+        weights = file_size or profile.file_size
+        # A vision projector and the prompt-cache ceiling are resident too, and
+        # llama-server holds them outside the weights file.
+        extras, extra_detail = _sidecar_bytes(model.cmd)
+        est = estimate_resident_ram(weights, kv + recurrent) + extras
+        detail = f"weights {weights / 2**30:.1f} + KV {kv / 2**30:.1f} GiB @ {ctx:,} tok ctx"
+        if profile.full_attention_interval > 1:
+            detail += f" ({cached_layers}/{profile.n_layer} attention layers"
+            if recurrent:
+                detail += f" + {recurrent / 2**30:.1f} GiB recurrent state"
+            detail += ")"
+        detail += extra_detail
         if calibration is not None:
             corrected = calibration.corrected_bytes(model.id, est)
             if corrected != est:
@@ -366,18 +408,12 @@ def _variant_estimate(
     file_size = model.file.stat().st_size if model.file and model.file.exists() else 0
     if not file_size:
         file_size = profile.file_size
-    kv = kv_cache_bytes(
-        profile.n_layer,
-        profile.n_kv_heads,
-        profile.k_len,
-        profile.v_len,
-        ctx,
-        cache_type=cache_type,
-    )
-    est = estimate_resident_ram(file_size, kv)
+    kv, recurrent = context_bytes(profile, ctx, cache_type)
+    extras, extra_detail = _sidecar_bytes(model.cmd)
+    est = estimate_resident_ram(file_size, kv + recurrent) + extras
     detail = (
         f"weights {file_size / 2**30:.1f} + KV {kv / 2**30:.1f} GiB "
-        f"@ {ctx:,} tok ctx ({cache_type})"
+        f"@ {ctx:,} tok ctx ({cache_type}){extra_detail}"
     )
     if calibration is not None:
         corrected = calibration.corrected_bytes(model.id, est)
@@ -582,31 +618,10 @@ def rightsizing_advice(
     if suggested >= configured_ctx:
         return None
 
-    k_type, _v_type = _cache_types(model.cmd)
-    try:
-        kv_configured = kv_cache_bytes(
-            profile.n_layer,
-            profile.n_kv_heads,
-            profile.k_len,
-            profile.v_len,
-            configured_ctx,
-            cache_type=k_type,
-        )
-        kv_suggested = kv_cache_bytes(
-            profile.n_layer,
-            profile.n_kv_heads,
-            profile.k_len,
-            profile.v_len,
-            suggested,
-            cache_type=k_type,
-        )
-    except ValueError:
-        kv_configured = kv_cache_bytes(
-            profile.n_layer, profile.n_kv_heads, profile.k_len, profile.v_len, configured_ctx
-        )
-        kv_suggested = kv_cache_bytes(
-            profile.n_layer, profile.n_kv_heads, profile.k_len, profile.v_len, suggested
-        )
+    k_type, v_type = _cache_types(model.cmd)
+    # Only the KV cache shrinks with the context; the recurrent state does not.
+    kv_configured, _ = context_bytes(profile, configured_ctx, k_type, v_type)
+    kv_suggested, _ = context_bytes(profile, suggested, k_type, v_type)
 
     freed = kv_configured - kv_suggested
     if freed < _RIGHTSIZE_MIN_SAVINGS_BYTES:
