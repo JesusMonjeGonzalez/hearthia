@@ -84,6 +84,76 @@ _KV_BYTES_PER_ELEMENT = {
 }
 
 
+def attention_layers(n_layer: int, full_attention_interval: int = 1, nextn_layers: int = 0) -> int:
+    """How many layers actually hold a KV cache.
+
+    Mirrors llama.cpp's hybrid rule (``qwen35.cpp``): a trunk layer caches when
+    ``(index + 1) % interval == 0``; the appended MTP/NextN layers are dense
+    attention and always cache. A 65-block Qwen3.8 at interval 4 caches on 17
+    layers, not 65 — the difference is gigabytes at a long context.
+    """
+    if full_attention_interval <= 1:
+        return n_layer
+    trunk = max(n_layer - nextn_layers, 0)
+    return trunk // full_attention_interval + (n_layer - trunk)
+
+
+def recurrent_state_bytes(
+    n_layer: int,
+    full_attention_interval: int = 1,
+    nextn_layers: int = 0,
+    d_conv: int = 0,
+    d_inner: int = 0,
+    d_state: int = 0,
+    n_group: int = 0,
+    n_seq: int = 1,
+) -> int:
+    """Fixed f32 conv + SSM state the non-attention layers hold.
+
+    Unlike the KV cache this does not grow with the context, but it is not free
+    either, so a hybrid estimate that ignores it reads low. Element counts follow
+    ``llama_hparams::n_embd_r``/``n_embd_s`` for Mamba-style layers.
+    """
+    if full_attention_interval <= 1:
+        return 0
+    trunk = max(n_layer - nextn_layers, 0)
+    recurrent = trunk - trunk // full_attention_interval
+    conv = max(d_conv - 1, 0) * (d_inner + 2 * n_group * d_state)
+    return recurrent * (conv + d_state * d_inner) * 4 * max(n_seq, 1)
+
+
+def context_bytes(
+    profile,
+    ctx: int,
+    cache_type: str = "q8_0",
+    v_cache_type: str | None = None,
+) -> tuple[int, int]:
+    """``(kv_cache, recurrent_state)`` for a profile at one context length.
+
+    The single place that turns a GGUF header into context memory, so the warm
+    gate, the KV advisor and ``hearth est`` cannot drift apart on a hybrid model.
+    """
+    cached = attention_layers(
+        profile.n_layer, profile.full_attention_interval, profile.nextn_layers
+    )
+    try:
+        kv = kv_cache_bytes(
+            cached, profile.n_kv_heads, profile.k_len, profile.v_len, ctx, cache_type, v_cache_type
+        )
+    except ValueError:
+        kv = kv_cache_bytes(cached, profile.n_kv_heads, profile.k_len, profile.v_len, ctx)
+    recurrent = recurrent_state_bytes(
+        profile.n_layer,
+        profile.full_attention_interval,
+        profile.nextn_layers,
+        profile.ssm_d_conv,
+        profile.ssm_d_inner,
+        profile.ssm_d_state,
+        profile.ssm_n_group,
+    )
+    return kv, recurrent
+
+
 def kv_cache_bytes(
     n_layer: int,
     n_kv_heads: int,
@@ -91,6 +161,7 @@ def kv_cache_bytes(
     v_len: int,
     ctx: int,
     cache_type: str = "q8_0",
+    v_cache_type: str | None = None,
 ) -> int:
     """Exact KV cache size for a model at a given context length.
 
@@ -101,14 +172,15 @@ def kv_cache_bytes(
     All parameters come from the GGUF header (`block_count`,
     `attention.head_count_kv`, `attention.key_length`, `attention.value_length`).
     """
+    types = (cache_type, v_cache_type if v_cache_type is not None else cache_type)
     try:
-        bytes_per_element = _KV_BYTES_PER_ELEMENT[cache_type]
-    except KeyError:
+        k_bytes, v_bytes = (_KV_BYTES_PER_ELEMENT[t] for t in types)
+    except KeyError as e:
         raise ValueError(
-            f"unknown cache type {cache_type!r}; "
+            f"unknown cache type {e.args[0]!r}; "
             f"expected one of {', '.join(sorted(_KV_BYTES_PER_ELEMENT))}"
         ) from None
-    per_token = n_layer * (k_len + v_len) * n_kv_heads * bytes_per_element
+    per_token = n_layer * n_kv_heads * (k_len * k_bytes + v_len * v_bytes)
     return int(per_token * ctx)
 
 

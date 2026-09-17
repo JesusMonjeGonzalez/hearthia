@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from hearthia.gguf import model_ram_profile
-from hearthia.library import estimate_resident_ram, kv_cache_bytes
+from hearthia.library import context_bytes, estimate_resident_ram
 
 log = logging.getLogger("hearthia.adopt")
 
@@ -40,8 +40,8 @@ def _estimate(path: Path) -> tuple[int, bool]:
         size = path.stat().st_size
         return int(size * 1.3), False
     ctx = min(profile.context_length, _REFERENCE_CTX)
-    kv = kv_cache_bytes(profile.n_layer, profile.n_kv_heads, profile.k_len, profile.v_len, ctx)
-    return estimate_resident_ram(profile.file_size, kv), True
+    kv, recurrent = context_bytes(profile, ctx)
+    return estimate_resident_ram(profile.file_size, kv + recurrent), True
 
 
 def scan_dir(root: Path) -> list[AdoptedModel]:

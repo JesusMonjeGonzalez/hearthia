@@ -1196,7 +1196,7 @@ def gguf_info(
 ) -> None:
     """Header-only cost report for a GGUF file — no model data is touched."""
     from hearthia.gguf import model_ram_profile
-    from hearthia.library import kv_cache_bytes
+    from hearthia.library import attention_layers, context_bytes
 
     profile = model_ram_profile(gguf_file)
     if profile is None:
@@ -1210,17 +1210,16 @@ def gguf_info(
         profile,
         ctx=ctx or None,
     )
-    per_1k = kv_cache_bytes(
-        profile.n_layer,
-        profile.n_kv_heads,
-        profile.k_len,
-        profile.v_len,
-        1024,
-        cache_type=cache,
+    per_1k, _ = context_bytes(profile, 1024, cache)
+    cached = attention_layers(
+        profile.n_layer, profile.full_attention_interval, profile.nextn_layers
     )
+    geometry = f"{profile.n_layer} layers"
+    if cached != profile.n_layer:
+        geometry += f" ({cached} cache KV)"
     typer.echo(f"{gguf_file.name}")
     typer.echo(
-        f"  architecture geometry : {profile.n_layer} layers · "
+        f"  architecture geometry : {geometry} · "
         f"{profile.n_kv_heads} KV heads · {profile.k_len}+{profile.v_len} head dims"
     )
     typer.echo(f"  {est.detail}")
