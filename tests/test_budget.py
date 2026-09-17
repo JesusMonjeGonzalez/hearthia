@@ -181,6 +181,31 @@ def test_plan_warm_blocks_when_over_ceiling(tmp_path, monkeypatch):
     assert d.wired_limit == int(36 * GIB * 0.75)  # default ceiling
 
 
+def test_plan_warm_reports_the_binding_ceiling(tmp_path, monkeypatch):
+    # The wired limit and available RAM both have to pass, so the refusal must
+    # quote whichever is lower — the old message quoted the larger of the two.
+    monkeypatch.setattr("hearthia.budget.wired_limit_bytes", lambda total: 27 * GIB)
+    f = tmp_path / "big.gguf"
+    with open(f, "wb") as fh:  # sparse — no allocation
+        fh.truncate(10 * GIB)
+    big = _model("big", file=f)
+    resident = {"a": 20 * GIB}
+
+    by_available = plan_warm(
+        [big], "big", resident, ram_total=36 * GIB, ram_available=20 * GIB, mode="enforce"
+    )
+    assert by_available.allowed is False
+    assert "20.0 GiB ceiling" in by_available.blocked_reason
+    assert "27.0 GiB wired, 20.0 GiB available" in by_available.blocked_reason
+
+    by_wired = plan_warm(
+        [big], "big", resident, ram_total=36 * GIB, ram_available=30 * GIB, mode="enforce"
+    )
+    assert by_wired.allowed is False
+    assert "27.0 GiB ceiling" in by_wired.blocked_reason
+    assert "27.0 GiB wired, 30.0 GiB available" in by_wired.blocked_reason
+
+
 def test_plan_warm_warn_mode_allows_with_warning(tmp_path, monkeypatch):
     monkeypatch.setattr("hearthia.budget.wired_limit_bytes", lambda total: int(total * 0.75))
     f = tmp_path / "big.gguf"
