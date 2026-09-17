@@ -39,8 +39,8 @@ async def rehearse(
     all_models = targets if all_models is None else all_models
     results: list[dict] = []
     for model in targets:
-        running = await gw.running()
-        running_ids = {m.get("model", "") for m in running}
+        running = await gw.inventory()
+        running_ids = {m.get("model", "") for m in running or []}
         was_warm = model.id in running_ids
 
         if not was_warm:

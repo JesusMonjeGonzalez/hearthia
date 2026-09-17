@@ -331,7 +331,7 @@ async def load_model(model_id: str, request: Request):
     decision = plan_warm_now(
         reg.models(),
         model_id,
-        await gw.running(),
+        await gw.inventory(),
         mode=s.memory.mode if s.memory else "enforce",
         calibration=getattr(request.app.state, "calibration", None),
         power=read_power_state(),

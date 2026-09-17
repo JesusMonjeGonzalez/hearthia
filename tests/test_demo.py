@@ -95,3 +95,15 @@ async def test_demo_gguf_shells_parse(tmp_path):
     assert profile is not None
     assert profile.n_layer == 48  # dense 27B profile
     assert profile.n_kv_heads == 4
+
+
+async def test_demo_gateway_reports_an_inventory(tmp_path):
+    """The synthetic gateway answers inventory() directly, so the demo never
+    falls into the unreadable-inventory branch of the warm gate."""
+    app = create_demo_app(demo_dir=tmp_path)
+    gw = app.state.gateway
+    inventory = await gw.inventory()
+    assert inventory is not None
+    assert [m["model"] for m in inventory] == ["embed-mini"]
+    assert await gw.running() == inventory
+    await gw.close()

@@ -23,18 +23,28 @@ class Gateway:
         except httpx.HTTPError:
             return False
 
-    async def running(self) -> list[dict]:
+    async def inventory(self) -> list[dict] | None:
+        """Resident models, or ``None`` when the inventory could not be read.
+
+        The distinction matters for the memory gate: an unreachable gateway is
+        not the same as an empty machine, and treating it as one lets a load
+        through on top of models that are still resident.
+        """
         try:
             r = await self._client.get(f"{self.base_url}/running")
         except httpx.HTTPError:
-            return []
+            return None
         if r.status_code != 200:
-            return []
+            return None
         try:
             data = r.json().get("running") or []
         except ValueError:
-            return []
-        return data if isinstance(data, list) else []
+            return None
+        return data if isinstance(data, list) else None
+
+    async def running(self) -> list[dict]:
+        """Resident models for display; an unreadable inventory reads as empty."""
+        return await self.inventory() or []
 
     async def warm(self, model_id: str, timeout: float = 300.0) -> bool:
         try:

@@ -299,7 +299,7 @@ async def _tool_warm(s: Settings, args: dict) -> str:
         decision = plan_warm_now(
             _reg(s).models(),
             model_id,
-            await gw.running(),
+            await gw.inventory(),
             mode=s.memory.mode if s.memory else "enforce",
         )
         if not decision.allowed:
