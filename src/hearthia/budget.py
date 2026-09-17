@@ -191,9 +191,11 @@ def plan_warm(
             lines=lines,
         )
 
+    # Both ceilings have to pass, so the lower one is what actually binds.
     reason = (
         f"{candidate_id} does not fit the unified-memory budget: "
-        f"{total / 2**30:.1f} GiB needed, {max(wired, ram_available) / 2**30:.1f} GiB ceiling. "
+        f"{total / 2**30:.1f} GiB needed, {min(wired, ram_available) / 2**30:.1f} GiB ceiling "
+        f"({wired / 2**30:.1f} GiB wired, {ram_available / 2**30:.1f} GiB available). "
         "Cool another model (hearth cool), lower --ctx-size, or use --force."
     )
     if mode == "enforce":

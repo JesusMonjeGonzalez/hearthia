@@ -12,6 +12,8 @@
 
 - Log streaming rejects gateway HTTP errors instead of displaying their response
   bodies as log lines; the dashboard shows the existing unavailable-gateway notice.
+- Warm-gate refusals now quote the binding memory ceiling — the lower of the
+  wired limit and available RAM — instead of the larger of the two.
 
 ## 0.5.0 — 2026-09-01
 
