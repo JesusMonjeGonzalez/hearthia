@@ -83,6 +83,7 @@ class Gateway:
             f"{self.base_url}/logs/stream",
             timeout=httpx.Timeout(None, connect=5.0),
         ) as r:
+            r.raise_for_status()
             async for chunk in r.aiter_bytes():
                 yield chunk
 
