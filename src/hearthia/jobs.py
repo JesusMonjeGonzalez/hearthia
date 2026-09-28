@@ -200,10 +200,12 @@ class JobRegistry:
                 if job.state == "running":
                     job.state = "done" if job.proc.returncode == 0 else "failed"
             except TimeoutError:
-                job.state = "timeout"
+                # Reap first, publish after: a terminal state must never be
+                # observable while its exit code is still missing.
                 kill_group(job.pid)
                 await job.proc.wait()
                 job.exit_code = job.proc.returncode
+                job.state = "timeout"
         finally:
             await writer
             job.finished = time.monotonic()

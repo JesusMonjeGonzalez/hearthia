@@ -25,6 +25,13 @@
   the vitals strip shows the daemon version and live jobs/hooks counts, and
   the chat footer lists the shortcuts.
 
+### Fixed
+
+- A job's `timeout` state was published before its exit code was recorded, so
+  a fast poll could observe a terminal state without a status (caught by CI on
+  a loaded runner). The process is now reaped first and the state published
+  after.
+
 ### Added
 
 - **`scripts/install.sh`**: dependency check (`--check`), Homebrew/uv install,
