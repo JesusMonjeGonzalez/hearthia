@@ -48,6 +48,15 @@ export async function refreshStatus() {
     $("#v-swap").title = `sampled ${fmtClock(Math.max(0, (Date.now() - (sys.sampled_at || 0) * 1000) / 1000))} ago`;
     $("#v-disk").textContent = fmtGB(sys.disk_free);
     const policy = s.memory_policy;
+    if (s.version) $("#v-version").textContent = s.version;
+    if (s.jobs_running) {
+      $("#v-jobs").textContent = `${s.jobs_running} running`;
+      $("#v-jobs").title = s.hooks_configured
+        ? `${s.jobs_running} background job(s) · ${s.hooks_configured} hook(s) configured`
+        : `${s.jobs_running} background job(s)`;
+    } else {
+      $("#v-jobs").textContent = s.hooks_configured ? `${s.hooks_configured} hooks` : "none";
+    }
     if (policy) {
       const large = policy.max_large_models === 1 ? "1 large" : `${policy.max_large_models} large`;
       const helpers = policy.helper_max_mib > 0 ? `+ helpers ≤${(policy.helper_max_mib / 1024).toFixed(1)}G` : "+ no helpers";
@@ -338,5 +347,14 @@ export function refreshAll() {
   refreshModels();
 }
 
-setInterval(refreshStatus, 2000);
-setInterval(refreshModels, 6000);
+// A hidden dashboard should not keep waking the daemon: skip polls when the
+// tab is not visible and refresh immediately when it comes back.
+setInterval(() => {
+  if (!document.hidden) refreshStatus();
+}, 2000);
+setInterval(() => {
+  if (!document.hidden) refreshModels();
+}, 6000);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refreshStatus();
+});

@@ -9,6 +9,7 @@ regardless of model size.
 import logging
 import struct
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +83,23 @@ class _Reader:
             raise ValueError(f"implausible string length {n}")
         return self._f.read(n).decode("utf-8", errors="replace")
 
+    def _skip_strings(self, count: int) -> None:
+        """Read every length prefix in bulk, then seek past all the payloads.
+
+        A tokenizer array holds ~150k strings; one ``read``+``seek`` per
+        element cost tens of milliseconds per header read. Unpacking the
+        length table in chunks is the same result in a fraction of the time.
+        """
+        remaining = count
+        while remaining > 0:
+            chunk = min(remaining, 100_000)
+            try:
+                lengths = struct.unpack(f"<{chunk}Q", self._f.read(8 * chunk))
+            except struct.error as exc:  # truncated header
+                raise ValueError("truncated string array") from exc
+            self._f.seek(sum(lengths), 1)
+            remaining -= chunk
+
     def _skip_value(self, vtype: int) -> None:
         if vtype == _T_STR:
             n = self._read("<Q")
@@ -90,12 +108,17 @@ class _Reader:
             elem_type = self._read("<I")
             count = self._read("<Q")
             if elem_type == _T_STR:
-                for _ in range(min(count, _MAX_ARRAY_ELEMENTS)):
-                    self._f.seek(self._read("<Q"), 1)
+                self._skip_strings(count)
             elif elem_type in _SCALAR_FMT:
                 self._f.seek(count * struct.calcsize(_SCALAR_FMT[elem_type]), 1)
             else:
                 raise ValueError("nested arrays are not supported")
+        elif vtype in _SCALAR_FMT:
+            # A scalar has to consume its bytes or the rest of the stream
+            # desynchronises: skipping is not the same as ignoring.
+            self._f.seek(struct.calcsize(_SCALAR_FMT[vtype]), 1)
+        else:
+            raise ValueError(f"unknown GGUF value type {vtype}")
 
     def _read_value(self, vtype: int) -> object:
         if vtype == _T_STR:
@@ -117,14 +140,13 @@ class _Reader:
 
     def _skip_array_body(self, elem_type: int, count: int) -> None:
         if elem_type == _T_STR:
-            for _ in range(count):
-                self._f.seek(self._read("<Q"), 1)
+            self._skip_strings(count)
         elif elem_type in _SCALAR_FMT:
             self._f.seek(count * struct.calcsize(_SCALAR_FMT[elem_type]), 1)
         else:
             raise ValueError("nested arrays are not supported")
 
-    def parse(self) -> dict[str, object]:
+    def parse(self, wanted: set[str] | None = None) -> dict[str, object]:
         magic = self._f.read(4)
         if magic != b"GGUF":
             raise ValueError("not a GGUF file")
@@ -137,6 +159,9 @@ class _Reader:
             key = self._read_string()
             vtype = self._read("<I")
             try:
+                if wanted is not None and key not in wanted:
+                    self._skip_value(vtype)
+                    continue
                 value = self._read_value(vtype)
             except ValueError:
                 break  # unsupported shape — keep what we have
@@ -144,11 +169,15 @@ class _Reader:
         return self._kvs
 
 
-def read_metadata(path: Path) -> dict[str, object]:
-    """Parse GGUF header metadata. Raises on malformed input."""
+def read_metadata(path: Path, wanted: set[str] | None = None) -> dict[str, object]:
+    """Parse GGUF header metadata. Raises on malformed input.
+
+    ``wanted`` keeps only those keys materialised; everything else is skipped
+    without building Python objects (tokenizer vocabularies dominate a header).
+    """
     r = _Reader(path)
     try:
-        return r.parse()
+        return r.parse(wanted)
     finally:
         r.close()
 
@@ -165,6 +194,45 @@ def _as_int(value: object) -> int | None:
     return None
 
 
+_PROFILE_SUFFIXES = (
+    "block_count",
+    "attention.head_count",
+    "attention.head_count_kv",
+    "attention.key_length",
+    "attention.value_length",
+    "embedding_length",
+    "context_length",
+    "full_attention_interval",
+    "nextn_predict_layers",
+)
+
+
+@lru_cache(maxsize=64)
+def _cached_metadata(path_str: str, size: int, mtime_ns: int) -> dict | None:
+    """Header metadata for a memory profile, cached per file identity.
+
+    ``size`` and ``mtime_ns`` are part of the cache key, so a replaced or
+    re-downloaded model is re-read; a warm gate no longer pays a header parse
+    for every round of every turn.
+    """
+    wanted = {"general.architecture"}
+    # Architectures differ in their prefix, so read the arch first and then
+    # the keys it needs in a second targeted pass (still two cheap reads).
+    try:
+        arch_entry = read_metadata(Path(path_str), wanted={"general.architecture"})
+    except (OSError, ValueError, struct.error) as e:
+        log.debug("gguf header unreadable for %s: %s", path_str, e)
+        return None
+    arch = arch_entry.get("general.architecture")
+    if isinstance(arch, str):
+        wanted.update(f"{arch}.{suffix}" for suffix in _PROFILE_SUFFIXES)
+    try:
+        return read_metadata(Path(path_str), wanted=wanted)
+    except (OSError, ValueError, struct.error) as e:
+        log.debug("gguf header unreadable for %s: %s", path_str, e)
+        return None
+
+
 def model_ram_profile(path: Path) -> RamProfile | None:
     """Extract a memory profile from a GGUF header, or None if unreadable.
 
@@ -173,9 +241,11 @@ def model_ram_profile(path: Path) -> RamProfile | None:
     mainstream architecture ships with.
     """
     try:
-        kv = read_metadata(path)
-    except (OSError, ValueError, struct.error) as e:
-        log.debug("gguf header unreadable for %s: %s", path, e)
+        info = path.stat()
+    except OSError:
+        return None
+    kv = _cached_metadata(str(path), info.st_size, info.st_mtime_ns)
+    if kv is None:
         return None
 
     arch = kv.get("general.architecture")

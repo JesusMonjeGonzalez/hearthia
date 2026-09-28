@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Packing is 33× faster** (120 ms → 3.7 ms on a 481-message conversation):
+  message sizes are cached and the total maintained incrementally, the digest
+  is built without re-encoding its lines on every drop, and the question
+  boundaries are found by scanning the front instead of the whole list. The
+  reported byte count stays exact (asserted for plain, trimmed and
+  summary paths). Fixed a latent cache bug this exposed: a freshly built
+  digest could inherit the size of a freed one via a recycled `id()`.
+- **GGUF headers are read 11× faster and cached** (58 ms → 5.2 ms cold,
+  ~0 ms warm): `read_metadata` can materialise only the keys a caller needs,
+  string arrays (tokenizer vocabularies) are skipped in bulk instead of one
+  seek per element, and profiles are cached per (path, size, mtime). Reading
+  every model in the stack went from ~1.1 s to ~50 ms. Fixed `_skip_value`
+  missing its scalar branch — dead code until the targeted path used it, and
+  it desynchronised the stream.
+- **Admission is memoised for the turn** (10 s TTL): quick tool rounds no
+  longer pay a gateway inventory round-trip each; a long tool phase still
+  re-checks.
+- **The dashboard stops polling on a hidden tab** and refreshes on return;
+  the vitals strip shows the daemon version and live jobs/hooks counts, and
+  the chat footer lists the shortcuts.
+
+### Added
+
+- **`scripts/install.sh`**: dependency check (`--check`), Homebrew/uv install,
+  launchd services and the first `hearth chat` in one idempotent command.
+
 ## 0.6.0 — 2026-09-28
 
 ### Added

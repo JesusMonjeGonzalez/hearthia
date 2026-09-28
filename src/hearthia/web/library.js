@@ -162,5 +162,6 @@ $("#hf-form").addEventListener("submit", async (e) => {
 });
 
 setInterval(() => {
+  if (document.hidden) return;
   if ($("#tab-library").classList.contains("active")) refreshDownloads();
 }, 2000);

@@ -59,63 +59,118 @@ def pack_context(
     digest_entries: list[str] = []
     dropped_preview: list[str] = []
 
+    # Sizes are the hot path: pack runs once per turn over long histories and
+    # used to re-serialise the whole list on every test. Each message is
+    # serialised at most once and the total is maintained incrementally; the
+    # exact figure also carries the ", " separators between list items.
+    sizes: dict[int, tuple[dict, int]] = {}
+
+    def message_bytes(message: dict) -> int:
+        # The cache holds the message itself: without that reference a freed
+        # digest dict can hand its id to the next one and inherit its size.
+        key = id(message)
+        cached = sizes.get(key)
+        if cached is None or cached[0] is not message:
+            value = len(json.dumps(message, ensure_ascii=False).encode())
+            sizes[key] = (message, value)
+            return value
+        return cached[1]
+
+    total = {"bytes": sum(message_bytes(message) for message in out)}
+
     def size() -> int:
-        return len(json.dumps(out, ensure_ascii=False).encode())
+        # serialized messages + the "[", "]" and ", " separators of the list
+        return total["bytes"] + 2 * len(out)
 
     def digest_message() -> dict | None:
-        lines = list(digest_entries)
+        # Sizes are tracked incrementally: rebuilding and encoding the whole
+        # digest on every drop made packing quadratic in a long session.
+        lengths = [len(line.encode()) for line in digest_entries]
         if summary:
             # Opt-in rolling summary first; the deterministic stubs of newer
             # drops follow, bounded separately so neither starves the other.
             # The summary is truncated here too: a stored one may be longer
             # than the digest budget allows.
-            header_room = len(SUMMARY_HEADER) + 4
+            header_room = len(SUMMARY_HEADER.encode()) + 4
             capped = summary.encode()[: SUMMARY_DIGEST_LIMIT_BYTES - header_room].decode(
                 "utf-8", errors="ignore"
             )
             limit = SUMMARY_DIGEST_LIMIT_BYTES - len(capped.encode()) - header_room
-            text = f"{SUMMARY_HEADER}\n{capped}"
-            tail: list[str] = []
-            for line in reversed(lines):
-                if len("\n".join(tail + [line]).encode()) > max(0, limit):
+            kept: list[str] = []
+            used = 0
+            for line, size in zip(reversed(digest_entries), reversed(lengths), strict=False):
+                extra = size + (1 if kept else 0)  # the "\n" before it
+                if used + extra > max(0, limit):
                     break
-                tail.insert(0, line)
-            if tail:
-                text += "\n" + "\n".join(tail)
+                used += extra
+                kept.append(line)
+            text = f"{SUMMARY_HEADER}\n{capped}"
+            if kept:
+                text += "\n" + "\n".join(reversed(kept))
             return {"role": "user", "content": text, "digest": True}
-        while lines and len((DIGEST_HEADER + "\n" + "\n".join(lines)).encode()) > (
+        body = sum(lengths) + max(0, len(lengths) - 1)
+        start = 0
+        while start < len(lengths) and len(DIGEST_HEADER.encode()) + 1 + body > (
             DIGEST_LIMIT_BYTES
         ):
-            lines.pop(0)  # newest memory survives the bound
-        if not lines:
+            body -= lengths[start] + (1 if start < len(lengths) - 1 else 0)
+            start += 1  # newest memory survives the bound
+        if start >= len(lengths):
             return None
-        return {"role": "user", "content": DIGEST_HEADER + "\n" + "\n".join(lines), "digest": True}
+        return {
+            "role": "user",
+            "content": DIGEST_HEADER + "\n" + "\n".join(digest_entries[start:]),
+            "digest": True,
+        }
+
+    digest_at: list[int] = [-1]
+
+    def find_digest() -> int | None:
+        index = digest_at[0]
+        if 0 <= index < len(out) and out[index].get("digest"):
+            return index
+        found = next((i for i, m in enumerate(out) if m.get("digest")), None)
+        digest_at[0] = -1 if found is None else found
+        return found
 
     def install_digest() -> None:
         # Always sits right after the system message; merges with a digest a
         # previous turn left behind so it never accumulates duplicates.
-        existing = next((i for i, m in enumerate(out) if m.get("digest")), None)
+        existing = find_digest()
         if existing is not None:
+            total["bytes"] -= message_bytes(out[existing])
             out.pop(existing)
+            digest_at[0] = -1
         message = digest_message()
         if message is None:
             return
+        total["bytes"] += message_bytes(message)
         insert_at = 1 if out and out[0].get("role") == "system" else 0
         out.insert(insert_at, message)
+        digest_at[0] = insert_at
 
     # Drop with hysteresis: each drop shifts the cached prefix, so free extra
     # room now instead of shifting again on the very next turn. The digest
     # keeps the dropped turns' questions and tool outcomes as continuity.
+    def question_boundaries() -> tuple[int, int] | None:
+        first: int | None = None
+        for index, message in enumerate(out):
+            if (
+                message.get("role") == "user"
+                and not message.get("digest")
+                and not message.get("context")
+            ):
+                if first is None:
+                    first = index
+                else:
+                    return first, index
+        return None
+
     while size() > budget * DROP_HEADROOM:
-        questions = [
-            i
-            for i, message in enumerate(out)
-            if message.get("role") == "user"
-            and not message.get("digest")
-            and not message.get("context")
-        ]
-        if len(questions) < 2:
+        boundaries = question_boundaries()
+        if boundaries is None:
             break
+        questions = boundaries
         dropped_slice = out[questions[0] : questions[1]]
         if len(dropped_preview) < DROPPED_PREVIEW_CHARS:
             for message in dropped_slice:
@@ -127,6 +182,8 @@ def pack_context(
                     break
                 dropped_preview.append(f"{message.get('role')}: {text}"[:room])
         digest_entries.extend(digest_lines(dropped_slice))
+        for message in dropped_slice:
+            total["bytes"] -= message_bytes(message)
         del out[questions[0] : questions[1]]
         dropped += 1
         install_digest()
@@ -136,7 +193,10 @@ def pack_context(
         target = max(256, len(content) - (size() - budget) - 128)
         if target >= len(content):
             return
+        total["bytes"] -= message_bytes(message)
+        sizes.pop(id(message), None)
         message["content"] = content[:target].decode("utf-8", errors="ignore") + note
+        total["bytes"] += message_bytes(message)
         nonlocal trimmed_tools, trimmed_context
         if counter == "context":
             trimmed_context += 1
@@ -163,9 +223,11 @@ def pack_context(
             )
     if size() > budget and digest_entries:
         # Last to give way: continuity memory yields before the turn fails.
-        existing = next((i for i, m in enumerate(out) if m.get("digest")), None)
+        existing = find_digest()
         if existing is not None:
+            total["bytes"] -= message_bytes(out[existing])
             out.pop(existing)
+            digest_at[0] = -1
     if size() > budget:
         raise ValueError(
             "Context limit reached: the current turn does not fit this model. "
@@ -175,7 +237,7 @@ def pack_context(
     def elements() -> dict:
         buckets = {"system": 0, "project_context": 0, "history": 0, "tool_results": 0, "digest": 0}
         for message in out:
-            size_bytes = len(json.dumps(message, ensure_ascii=False).encode())
+            size_bytes = message_bytes(message)
             if message.get("digest"):
                 buckets["digest"] += size_bytes
             elif message.get("context"):

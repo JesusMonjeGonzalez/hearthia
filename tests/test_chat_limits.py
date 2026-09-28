@@ -282,3 +282,54 @@ async def test_chat_reports_a_down_gateway_with_instructions(app):
     response = await post(app)
     assert "hearth up gateway" in response.text
     assert '"error"' in response.text
+
+
+async def test_gate_verdict_is_memoised_within_a_turn(app, monkeypatch):
+    """Two rounds share one admission check; a zero TTL re-checks every round."""
+    bodies = []
+
+    async def stream(raw):
+        bodies.append(json.loads(raw))
+        if len(bodies) == 1:
+            yield (
+                "data: "
+                + json.dumps(
+                    {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "id": "r1",
+                                            "type": "function",
+                                            "function": {"name": "list_dir", "arguments": "{}"},
+                                        }
+                                    ]
+                                },
+                                "finish_reason": "tool_calls",
+                            }
+                        ]
+                    }
+                )
+                + "\n\ndata: [DONE]\n\n"
+            ).encode()
+        else:
+            yield (
+                b'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n'
+                b"data: [DONE]\n\n"
+            )
+
+    app.state.gateway.chat_stream = stream
+    app.state.gateway.inventory.reset_mock()
+    await post(app, messages=[{"role": "user", "content": "hola"}])
+    assert len(bodies) == 2
+    assert app.state.gateway.inventory.await_count == 1
+
+    import hearthia.api.chat as chat_module
+
+    monkeypatch.setattr(chat_module, "_GATE_TTL_SECONDS", 0.0)
+    bodies.clear()
+    app.state.gateway.inventory.reset_mock()
+    await post(app, messages=[{"role": "user", "content": "otra vez"}])
+    assert app.state.gateway.inventory.await_count == 2

@@ -248,12 +248,21 @@ lifecycle and presents one operational surface.
 
 ## Quick Start
 
-Install the native dependencies and Hearthia directly from GitHub:
+One command installs the dependencies, Hearthia and the background services:
 
 ```bash
-brew install llama.cpp llama-swap
-brew install uv
+git clone https://github.com/JesusMonjeGonzalez/hearthia.git && cd hearthia
+./scripts/install.sh          # add --check to only report what is missing
+```
+
+It installs `uv`, `llama.cpp` and `llama-swap` through Homebrew when missing,
+installs the tool with `uv tool install`, registers the launchd services and
+opens the chat. Manual equivalent, if you prefer it step by step:
+
+```bash
+brew install llama.cpp llama-swap uv
 uv tool install git+https://github.com/JesusMonjeGonzalez/hearthia.git
+hearth install && hearth
 ```
 
 Create Hearthia's stack directory and provide a llama-swap configuration:

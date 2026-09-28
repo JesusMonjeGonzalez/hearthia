@@ -341,6 +341,7 @@ def _edit_result_path(result: str) -> str:
 
 
 _PACING_WARN_ROUNDS = 3
+_GATE_TTL_SECONDS = 10.0  # reuse the admission verdict across quick rounds
 _SUMMARY_PROMPT = (
     "You maintain a compact rolling memory for a coding session. Merge the "
     "previous summary with the new turns into one summary of at most 200 "
@@ -1057,6 +1058,31 @@ async def chat(request: Request):
         yield ("data: " + json.dumps({"context": context_info}) + "\n\n").encode()
 
         max_rounds = agent_settings.max_tool_rounds
+        gate_cache: dict = {"at": 0.0, "decision": None}
+
+        async def decide_gate():
+            """Admission verdict, memoised for a few seconds.
+
+            Each check costs a gateway inventory round-trip; the resident set
+            only changes when something loads, so reusing the verdict across
+            quick rounds is safe and the TTL still catches slow tool phases.
+            """
+            cached = gate_cache["decision"]
+            if cached is not None and time.monotonic() - gate_cache["at"] < _GATE_TTL_SECONDS:
+                return cached
+            decision = plan_warm_now(
+                state.registry.models(),
+                model,
+                await gw.inventory(),
+                mode=state.settings.memory.mode,
+                calibration=getattr(state, "calibration", None),
+                power=read_power_state(),
+                policy=policy_from_memory(state.settings.memory),
+            )
+            gate_cache["decision"] = decision
+            gate_cache["at"] = time.monotonic()
+            return decision
+
         for round_no in range(max_rounds + 1):
             if not forced_final and _turn_budget_exhausted(
                 time.monotonic() - turn_started_at, agent_settings.turn_budget_minutes
@@ -1076,15 +1102,7 @@ async def chat(request: Request):
                     "Context budget exhausted mid-turn. Start a new chat or reduce attachments."
                 )
                 return
-            decision = plan_warm_now(
-                state.registry.models(),
-                model,
-                await gw.inventory(),
-                mode=state.settings.memory.mode,
-                calibration=getattr(state, "calibration", None),
-                power=read_power_state(),
-                policy=policy_from_memory(state.settings.memory),
-            )
+            decision = await decide_gate()
             if not decision.allowed:
                 yield fail(decision.blocked_reason)
                 return
