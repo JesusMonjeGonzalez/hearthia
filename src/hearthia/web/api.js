@@ -1,6 +1,7 @@
 /* api.js — shared utilities and API client for Hearthia dashboard. */
 
 export const $ = (s) => document.querySelector(s);
+import { errorMessage } from "./http-error.mjs";
 export const GB = 1024 ** 3;
 
 export const fmtGB = (b) => (b / GB).toFixed(1) + " GB";
@@ -13,7 +14,7 @@ export const fmtClock = (s) =>
 
 export const api = async (path, opts = {}) => {
   const r = await fetch(path, opts);
-  if (!r.ok) throw new Error((await r.text()) || r.statusText);
+  if (!r.ok) throw new Error(errorMessage(await r.text(), r.statusText));
   return r.json();
 };
 

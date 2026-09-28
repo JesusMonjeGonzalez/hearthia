@@ -21,6 +21,7 @@ from hearthia.budget import (
     estimate_model_ram,
     plan_set,
     plan_warm_now,
+    policy_from_memory,
     profile_for,
     running_resident,
 )
@@ -116,7 +117,16 @@ async def warm_model_ids(
     """
     models = reg.models()
     vm = psutil.virtual_memory()
-    running = running_resident(await gw.running())
+    inventory = await gw.inventory()
+    if inventory is None and (s.memory.mode if s.memory else "enforce") == "enforce":
+        return {
+            "ok": False,
+            "error": (
+                f"{label}: the gateway inventory is unavailable, so what is already "
+                "resident is unknown. Check the gateway, then retry."
+            ),
+        }
+    running = running_resident(inventory or [])
     total, wired, fits = _set_totals(models, model_ids, running, vm.available)
     calibration = CalibrationStore(s.paths.calibration_file)
 
@@ -143,9 +153,10 @@ async def warm_model_ids(
         decision = plan_warm_now(
             reg.models(),
             mid,
-            await gw.running(),
+            await gw.inventory(),
             mode=s.memory.mode if s.memory else "enforce",
             calibration=calibration,
+            policy=policy_from_memory(s.memory),
         )
         if not decision.allowed:
             refused = {

@@ -10,7 +10,7 @@ import psutil
 import typer
 
 from hearthia import __version__
-from hearthia.budget import WarmDecision, plan_warm_now
+from hearthia.budget import WarmDecision, plan_warm_now, policy_from_memory
 from hearthia.calibration import CalibrationStore
 from hearthia.demo import DEMO_PORT
 from hearthia.gateway import Gateway
@@ -46,9 +46,27 @@ async def _states(gw: Gateway) -> dict[str, str]:
     }
 
 
-@app.callback()
-def main() -> None:
-    """Hearthia — the self-tending fire for local models."""
+@app.callback(invoke_without_command=True)
+def main(ctx: typer.Context) -> None:
+    """Hearthia — the self-tending fire for local models.
+
+    Bare `hearth` goes straight to the agent chat: starts what is missing,
+    preloads the model through the RAM gate and opens the dashboard with the
+    current directory as the workspace.
+    """
+    if ctx.invoked_subcommand is None:
+        # Click fills unspecified parameters with None when invoking a plain
+        # callback, so every `chat` parameter is passed explicitly.
+        ctx.invoke(
+            chat,
+            ctx=ctx,
+            model="",
+            workspace="",
+            mode="build",
+            preload=True,
+            browser=True,
+            fresh=False,
+        )
 
 
 @app.command()
@@ -254,7 +272,7 @@ def warm(
         gw = Gateway(s.gateway.url)
         started = _time.monotonic()
         try:
-            running = await gw.running()
+            running = await gw.inventory()
             if force:
                 ok = await gw.warm(model_id, timeout=s.gateway.health_timeout)
                 canary = await _maybe_verify(gw, model_id, ok, verify)
@@ -268,6 +286,7 @@ def warm(
                 mode=s.memory.mode if s.memory else "enforce",
                 calibration=_calibration(s),
                 power=read_power_state(),
+                policy=policy_from_memory(s.memory),
             )
             if not decision.allowed:
                 return False, decision, None, 0.0
@@ -584,11 +603,35 @@ def purge() -> None:
 
 
 @app.command()
-def status() -> None:
+def status(
+    as_json: bool = typer.Option(False, "--json", help="Machine-readable snapshot."),
+) -> None:
     """Gateway health, warm models, memory budget, speeds and TTL countdowns."""
     import time as _time
 
     s = Settings()
+    if as_json:
+        import json as _json
+
+        import httpx as _httpx
+
+        try:
+            payload = _httpx.get(
+                f"http://{s.daemon.bind}:{s.daemon.port}/api/status", timeout=2
+            ).json()
+        except (_httpx.HTTPError, ValueError) as exc:
+            vm = psutil.virtual_memory()
+            payload = {
+                "daemon": "down",
+                "error": str(exc)[:200],
+                "memory": {
+                    "total": vm.total,
+                    "available": vm.available,
+                    "used_percent": vm.percent,
+                },
+            }
+        typer.echo(_json.dumps(payload, ensure_ascii=False, indent=2))
+        return
 
     async def run() -> tuple[bool, list[dict]]:
         gw = Gateway(s.gateway.url)
@@ -767,7 +810,23 @@ def up(service: str = typer.Argument("all", help="gateway | daemon | update | al
     targets = list(label_map.values()) if service == "all" else [label_map[service]]
     uid = os.getuid()
     launch_agents = Path.home() / "Library" / "LaunchAgents"
+    s = Settings()
+    health_urls = {
+        GATEWAY_LABEL: f"{s.gateway.url}/health",
+        DAEMON_LABEL: f"http://{s.daemon.bind}:{s.daemon.port}/api/status",
+    }
     for label in targets:
+        url = health_urls.get(label)
+        if url:
+            try:
+                import httpx as _httpx
+
+                if _httpx.get(url, timeout=1.5).status_code == 200:
+                    typer.echo(f"  up  {label} (already running)")
+                    continue
+            except _httpx.HTTPError:
+                pass
+        plist = launch_agents / f"{label}.plist"
         plist = launch_agents / f"{label}.plist"
         if not plist.exists():
             typer.echo(f"  {label} not installed — run 'hearth install' first")
@@ -975,19 +1034,34 @@ def advise(
 
     reg = _registry(s)
     gw = Gateway(s.gateway.url)
+    # Resolve aliases the way warm/tune do; unknown ids are reported, not dropped.
+    models = reg.models()
+    resolved: list[str] = []
+    unknown: list[str] = []
+    for wanted in model_ids:
+        match = next((m for m in models if wanted in (m.id, *m.aliases)), None)
+        if match is None:
+            unknown.append(wanted)
+        elif match.id not in resolved:
+            resolved.append(match.id)
+    if unknown:
+        typer.echo(f"  unknown model(s): {', '.join(unknown)} — see 'hearth models'")
+    if not resolved:
+        raise typer.Exit(1)
 
     async def run() -> tuple[dict, dict]:
         try:
             return advise_fit(
-                reg.models(),
-                list(model_ids),
+                models,
+                resolved,
                 running_resident(await gw.running()),
                 psutil.virtual_memory().total,
                 psutil.virtual_memory().available,
                 calibration=_calibration(s),
+                policy=policy_from_memory(s.memory),
             ), plan_set(
-                reg.models(),
-                list(model_ids),
+                models,
+                resolved,
                 psutil.virtual_memory().total,
                 psutil.virtual_memory().available,
                 calibration=_calibration(s),
@@ -1009,12 +1083,16 @@ def advise(
                     "ram_available": advice["ram_available"],
                     "plan": plan if advice["fits"] else None,
                     "options": [dataclasses.asdict(o) for o in advice["options"]],
+                    "policy": advice.get("policy"),
                 }
             )
         )
         if not advice["fits"] and not advice["options"]:
             raise typer.Exit(1)
         return
+    policy_note = (advice.get("policy") or {}).get("note")
+    if policy_note:
+        typer.echo(f"  policy    {policy_note}")
     if advice["fits"]:
         typer.echo("  the set fits as configured:")
         for line in _plan_lines(plan):
@@ -1196,7 +1274,7 @@ def gguf_info(
 ) -> None:
     """Header-only cost report for a GGUF file — no model data is touched."""
     from hearthia.gguf import model_ram_profile
-    from hearthia.library import kv_cache_bytes
+    from hearthia.library import attention_layers, context_bytes
 
     profile = model_ram_profile(gguf_file)
     if profile is None:
@@ -1210,17 +1288,16 @@ def gguf_info(
         profile,
         ctx=ctx or None,
     )
-    per_1k = kv_cache_bytes(
-        profile.n_layer,
-        profile.n_kv_heads,
-        profile.k_len,
-        profile.v_len,
-        1024,
-        cache_type=cache,
+    per_1k, _ = context_bytes(profile, 1024, cache)
+    cached = attention_layers(
+        profile.n_layer, profile.full_attention_interval, profile.nextn_layers
     )
+    geometry = f"{profile.n_layer} layers"
+    if cached != profile.n_layer:
+        geometry += f" ({cached} cache KV)"
     typer.echo(f"{gguf_file.name}")
     typer.echo(
-        f"  architecture geometry : {profile.n_layer} layers · "
+        f"  architecture geometry : {geometry} · "
         f"{profile.n_kv_heads} KV heads · {profile.k_len}+{profile.v_len} head dims"
     )
     typer.echo(f"  {est.detail}")
@@ -1452,96 +1529,6 @@ def lint() -> None:
 
 
 @app.command()
-def doctor() -> None:
-    """Check: llama.cpp present, ports free, wired limit, config valid, disk space."""
-    import shutil
-    import subprocess
-
-    s = Settings()
-    ok = True
-
-    gw_binary = shutil.which("llama-server") or str(s.gateway.binary)
-    if Path(gw_binary).exists():
-        typer.echo(f"  [OK]    llama-server  {gw_binary}")
-    else:
-        typer.echo(f"  [FAIL]  llama-server not found at {gw_binary}")
-        ok = False
-
-    swap_binary = shutil.which("llama-swap")
-    if swap_binary:
-        typer.echo(f"  [OK]    llama-swap   {swap_binary}")
-    else:
-        typer.echo("  [FAIL]  llama-swap not on PATH")
-        ok = False
-
-    if s.paths.gateway_config.exists():
-        typer.echo(f"  [OK]    config       {s.paths.gateway_config}")
-    else:
-        typer.echo(f"  [FAIL]  config not found at {s.paths.gateway_config}")
-        ok = False
-
-    vm = psutil.virtual_memory()
-    total_gib = vm.total / 2**30
-    avail_gib = vm.available / 2**30
-    typer.echo(f"  [INFO]  memory       {total_gib:.0f} GiB total, {avail_gib:.1f} GiB available")
-    mode = s.memory.mode if s.memory else "enforce"
-    typer.echo(f"  [INFO]  budget gate  {mode} ([memory] mode in config.toml)")
-
-    try:
-        out = subprocess.run(
-            ["/usr/sbin/sysctl", "-n", "iogpu.wired_limit_mb"],
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        mb = int(out)
-        if mb > 0:
-            typer.echo(f"  [INFO]  wired limit  {mb} MB (sysctl override)")
-        else:
-            typer.echo(f"  [INFO]  wired limit  default (~{int(vm.total * 0.75 / 1024**2)} MB)")
-    except (ValueError, OSError):
-        typer.echo(f"  [INFO]  wired limit  default (~{int(vm.total * 0.75 / 1024**2)} MB)")
-
-    models_dir = s.paths.models_dir
-    if models_dir and models_dir.exists():
-        disk = shutil.disk_usage(str(models_dir))
-        typer.echo(f"  [INFO]  disk free    {disk.free / 2**30:.0f} GiB")
-    else:
-        typer.echo(f"  [WARN]  models dir   {models_dir} does not exist")
-
-    services = {
-        "gateway": f"{s.gateway.url}/health",
-        "daemon": f"http://{s.daemon.bind}:{s.daemon.port}/api/status",
-    }
-    for name, url in services.items():
-        try:
-            response = httpx.get(url, timeout=2)
-            response.raise_for_status()
-            typer.echo(f"  [OK]    {name:<12} {url}")
-        except httpx.HTTPError:
-            typer.echo(f"  [FAIL]  {name:<12} unavailable at {url}")
-            ok = False
-
-    try:
-        r = httpx.get(f"http://{s.daemon.bind}:{s.daemon.port}/api/drift-warnings", timeout=2)
-        warnings = r.json().get("warnings", []) if r.status_code == 200 else []
-        for w in warnings:
-            typer.echo(
-                f"  [WARN]  loadout '{w['loadout']}' no longer fits after "
-                f"{w['model_id']} changed on disk "
-                f"({w['total_bytes'] / 2**30:.1f} GiB needed, "
-                f"{w['wired_limit'] / 2**30:.1f} GiB ceiling) — hearth advise {w['model_id']}"
-            )
-    except (httpx.HTTPError, ValueError, KeyError):
-        pass  # daemon down or too old to expose this — not a doctor failure on its own
-
-    if ok:
-        typer.echo("hearth is healthy.")
-    else:
-        typer.echo("issues found — fix the [FAIL] items above.")
-        raise typer.Exit(1)
-
-
-@app.command()
 def migrate() -> None:
     """Adopt an existing ~/llm-stack: write config, bootout old services, install new."""
     from hearthia.service import install_plists, migrate_from_llmstack
@@ -1574,7 +1561,6 @@ def pull(
     model_id: str = typer.Option("", "--id", help="Model id for --add (default: from filename)."),
 ) -> None:
     """Download a model from HuggingFace with SHA-256 verification."""
-    import httpx
 
     from hearthia.library import download_file, fit_check, list_gguf_files
     from hearthia.telemetry import wired_limit_bytes
@@ -1701,7 +1687,6 @@ def brain_capture(
     text: list[str] | None = typer.Argument(None, help="Text to capture."),  # noqa: B008
 ) -> None:
     """Capture a note into the vault, auto-titled/tagged by local AI."""
-    import httpx
 
     from hearthia.brain.capture import classify, get_text, write_note
 
@@ -1739,7 +1724,6 @@ def brain_search(
     k: int = typer.Option(8, "-k", help="Number of results."),
 ) -> None:
     """Semantic search over the vault."""
-    import httpx
 
     from hearthia.brain.indexer import BrainIndex
     from hearthia.brain.search import search as brain_search_fn
@@ -1770,7 +1754,6 @@ def brain_search(
 @brain_app.command("reindex")
 def brain_reindex() -> None:
     """Reindex the vault (embed new/changed notes, drop deleted)."""
-    import httpx
 
     from hearthia.brain.indexer import BrainIndex
     from hearthia.brain.search import reindex as brain_reindex_fn
@@ -1829,3 +1812,462 @@ def brain_status() -> None:
 
 if __name__ == "__main__":
     app()
+
+
+@app.command()
+def tune(
+    model_id: str | None = typer.Argument(None, help="Model id; omit to review every model"),
+) -> None:
+    """Speed/cost advice from measured data. Read-only: never changes config."""
+    import re as _re
+
+    from hearthia.budget import kv_bytes, profile_for
+    from hearthia.spec_decode import SpecDecodeLedger
+    from hearthia.usage_ledger import UsageLedger
+
+    s = Settings()
+    try:
+        models = _registry(s).models()
+    except FileNotFoundError as e:
+        typer.echo(f"no gateway config at {s.paths.gateway_config}")
+        raise typer.Exit(1) from e
+
+    spec = SpecDecodeLedger(s.paths.spec_decode_file)
+    usage = UsageLedger(s.paths.usage_ledger_file)
+    usage_snap = usage.snapshot()
+
+    def flag(cmd: str, name: str) -> str | None:
+        match = _re.search(rf"{_re.escape(name)}[= ]+([^\s]+)", cmd)
+        return match.group(1) if match else None
+
+    def number(cmd: str, name: str) -> int | None:
+        value = flag(cmd, name)
+        try:
+            return int(value) if value is not None else None
+        except ValueError:
+            return None
+
+    reviewed = 0
+    for model in models:
+        if model_id and model_id not in (model.id, *model.aliases):
+            continue
+        if model.embedding:
+            continue
+        reviewed += 1
+        typer.echo(f"\n{model.id} — ctx {model.ctx or '?'} · ttl {model.ttl or 'managed'}")
+
+        entry = spec.entry(model.id)
+        rate = entry.acceptance_rate if entry else None
+        draft_max = number(model.cmd, "--spec-draft-n-max")
+        if "--spec-type" in model.cmd or "--spec-draft-model" in model.cmd:
+            if rate is None:
+                typer.echo(
+                    "  spec-decode  no measured acceptance yet (needs ~200 draft tokens); "
+                    "run the model and check again"
+                )
+            elif rate < 0.30:  # same threshold the daemon flags on
+                typer.echo(
+                    f"  spec-decode  acceptance {rate * 100:.0f}% — drafting likely costs "
+                    "more than it saves; consider dropping --spec-type or lowering "
+                    "--spec-draft-n-max, then re-measure with scripts/benchmark.py"
+                )
+            elif rate >= 0.55 and (draft_max or 0) < 4:
+                typer.echo(
+                    f"  spec-decode  acceptance {rate * 100:.0f}% — try --spec-draft-n-max 4 "
+                    "and compare tok/s with scripts/benchmark.py"
+                )
+            else:
+                typer.echo(
+                    f"  spec-decode  acceptance {rate * 100:.0f}% — current setting looks "
+                    "reasonable"
+                )
+        else:
+            typer.echo("  spec-decode  not configured")
+
+        profile = profile_for(model)
+        kv = kv_bytes(model, profile)
+        cache_ram_mib = number(model.cmd, "--cache-ram")
+        if kv:
+            gib = kv / 2**30
+            if cache_ram_mib is None:
+                typer.echo(
+                    f"  prompt cache  KV is {gib:.2f} GiB for this context and --cache-ram "
+                    "is unset; a warm eviction cannot be restored from host cache"
+                )
+            elif cache_ram_mib < gib * 1024:
+                typer.echo(
+                    f"  prompt cache  --cache-ram {cache_ram_mib} MiB < KV {gib * 1024:.0f} MiB: "
+                    "one full slot state does not fit, so a TTL eviction re-prefills from "
+                    "scratch; raising it holds the state in host RAM (check the memory policy)"
+                )
+            else:
+                typer.echo(
+                    f"  prompt cache  --cache-ram {cache_ram_mib} MiB ≥ KV {gib * 1024:.0f} MiB"
+                )
+        if "--cache-reuse" not in model.cmd:
+            typer.echo(
+                "  cache-reuse  not set; --cache-reuse 256 is what makes shifted prefixes cheap"
+            )
+
+        used = usage_snap.get(model.id) or {}
+        peak = used.get("max_context_observed") or 0
+        if peak:
+            window = model.ctx or 0
+            share = f"{100 * peak / window:.0f}% of the window" if window else "window unknown"
+            typer.echo(
+                f"  observed     peak context {peak:,} tok ({share}) · prompt "
+                f"{used.get('prompt_tokens', 0):,} tok · completion "
+                f"{used.get('completion_tokens', 0):,} tok since the ledger began"
+            )
+        else:
+            typer.echo("  observed     no usage recorded yet")
+
+        calibration = _calibration(s).snapshot().get(model.id) or {}
+        ratio = calibration.get("ratio")
+        if ratio and ratio > 1.15:
+            typer.echo(
+                f"  calibration  measured resident {ratio:.2f}× the header estimate "
+                "(already folded into future warm checks)"
+            )
+
+    if not model_id and not (s.agent.subagent_model or "").strip():
+        from hearthia.budget import estimate_model_ram, policy_from_memory, profile_for
+
+        policy = policy_from_memory(s.memory)
+        helpers = []
+        for candidate in models:
+            if candidate.embedding or not candidate.file:
+                continue
+            estimate = estimate_model_ram(candidate, profile_for(candidate))
+            if estimate.known and estimate.resident_bytes <= policy.helper_max_bytes:
+                helpers.append((estimate.resident_bytes, candidate.id))
+        if helpers:
+            helpers.sort()
+            size, helper_id = helpers[0]
+            typer.echo(
+                f"\n  subagents    [agent] subagent_model is unset; '{helper_id}' "
+                f"({size / 2**30:.1f} GiB) fits as a helper and would make task "
+                "subagents much faster"
+            )
+    if not reviewed:
+        typer.echo("no matching model (is it configured as chat/vision rather than embedding?)")
+    typer.echo(
+        "\nAdvisory only — nothing was modified. Benchmark changes with "
+        "scripts/benchmark.py or scripts/bench-prompt-cache.py."
+    )
+
+
+@app.command()
+def chat(
+    ctx: typer.Context,
+    model: str = typer.Option(
+        "", "--model", "-m", help="Model id or alias to preload and preselect."
+    ),
+    workspace: str = typer.Option(
+        "", "--workspace", "-w", help="Project directory (defaults to the current one)."
+    ),
+    mode: str = typer.Option("build", "--mode", help="read | build"),
+    preload: bool = typer.Option(True, "--warm/--no-warm", help="Preload the model first."),
+    browser: bool = typer.Option(True, "--open/--no-open", help="Open the dashboard."),
+    fresh: bool = typer.Option(
+        False, "--new", help="Start a new conversation instead of the last."
+    ),
+) -> None:
+    """Start everything and go straight to the agent chat."""
+    import os
+    import subprocess
+    import time as _time
+    import webbrowser
+    from urllib.parse import quote
+
+    import httpx
+
+    from hearthia.service import DAEMON_LABEL, GATEWAY_LABEL
+
+    if mode not in ("read", "build"):
+        typer.echo("mode must be read or build")
+        raise typer.Exit(1)
+    s = Settings()
+    workspace_path = str(Path(workspace or os.getcwd()).expanduser().resolve())
+    if not Path(workspace_path).is_dir():
+        typer.echo(f"workspace is not a directory: {workspace_path}")
+        raise typer.Exit(1)
+
+    def _answers(url: str) -> bool:
+        try:
+            return httpx.get(url, timeout=2).status_code == 200
+        except httpx.HTTPError:
+            return False
+
+    base = f"http://{s.daemon.bind}:{s.daemon.port}"
+    uid = os.getuid()
+    launch_agents = Path.home() / "Library" / "LaunchAgents"
+    checks = (
+        (GATEWAY_LABEL, f"{s.gateway.url}/health", "gateway"),
+        (DAEMON_LABEL, f"{base}/api/status", "daemon"),
+    )
+    for label, url, name in checks:
+        if _answers(url):
+            continue
+        plist = launch_agents / f"{label}.plist"
+        if not plist.exists():
+            typer.echo(f"  {name} not installed — run 'hearth install' first")
+            raise typer.Exit(1)
+        subprocess.run(
+            ["launchctl", "bootstrap", f"gui/{uid}", str(plist)], capture_output=True, text=True
+        )
+        typer.echo(f"  up  {name}")
+    for _ in range(40):  # the daemon serves the UI, so wait for it
+        if _answers(f"{base}/api/status"):
+            break
+        _time.sleep(0.25)
+    else:
+        typer.echo(f"daemon is not answering at {base}; check 'hearth logs daemon'")
+        raise typer.Exit(1)
+
+    model_id = model.strip() or (s.chat.default_model or "")
+    resolved = ""
+    if model_id:
+        try:
+            from hearthia.registry import Registry
+
+            registry = Registry(s.paths.gateway_config, s.paths.backups_dir)
+            match = next((m for m in registry.models() if model_id in (m.id, *m.aliases)), None)
+            resolved = match.id if match else ""
+        except Exception:  # noqa: BLE001 — a bad config must not block opening the chat
+            resolved = ""
+        if not resolved:
+            typer.echo(
+                f"  note: '{model_id}' is not in the gateway config; opening without preload"
+            )
+    if resolved and preload:
+        try:
+            ctx.invoke(warm, model_id=resolved, force=False, verify=False)
+        except typer.Exit as exc:  # the RAM gate refused: open the chat anyway
+            if exc.exit_code:
+                typer.echo("  note: the RAM gate refused the preload; the chat will re-check")
+    elif not model_id:
+        typer.echo("  note: no model preselected (set [chat] default_model or pass -m)")
+
+    url = (
+        f"{base}/?chat=1&workspace={quote(workspace_path)}"
+        + (f"&model={quote(resolved or model_id)}" if (resolved or model_id) else "")
+        + f"&mode={mode}"
+        + ("&new=1" if fresh else "")
+    )
+    typer.echo(f"  chat  {url}")
+    typer.echo(f"  dir   {workspace_path} ({mode})")
+    if browser:
+        webbrowser.open(url)
+    else:
+        typer.echo("  open that URL in your browser")
+
+
+@app.command()
+def go(
+    ctx: typer.Context,
+    model: str = typer.Option("", "--model", "-m", help="Model id or alias to preload."),
+    workspace: str = typer.Option("", "--workspace", "-w", help="Project directory."),
+    mode: str = typer.Option("build", "--mode", help="read | build"),
+    preload: bool = typer.Option(True, "--warm/--no-warm", help="Preload the model first."),
+    browser: bool = typer.Option(True, "--open/--no-open", help="Open the dashboard."),
+    fresh: bool = typer.Option(
+        False, "--new", help="Start a new conversation instead of the last."
+    ),
+) -> None:
+    """Shortcut for `hearth chat` — same flags, shorter verb."""
+    ctx.invoke(
+        chat,
+        ctx=ctx,
+        model=model,
+        workspace=workspace,
+        mode=mode,
+        preload=preload,
+        browser=browser,
+        fresh=fresh,
+    )
+
+
+@app.command()
+def chats(
+    action: str = typer.Argument("list", help="list | search | export | delete"),
+    value: str = typer.Argument("", help="Search text or conversation id"),
+    limit: int = typer.Option(20, "--limit", "-n", help="Rows for list and search"),
+    as_json: bool = typer.Option(False, "--json", help="Machine-readable output"),
+) -> None:
+    """Chat conversations from the terminal: list, search (full text) or export."""
+    import json as _json
+    import time as _time
+
+    from hearthia.conversations import ConversationStore
+
+    s = Settings()
+    store = ConversationStore(s.paths.stack_dir / "conversations.sqlite3")
+
+    def _age(seconds: float) -> str:
+        hours = (_time.time() - seconds) / 3600
+        return f"{hours:.1f}h ago" if hours >= 1 else f"{hours * 60:.0f}m ago"
+
+    if action == "list":
+        rows = store.list_conversations(limit=max(1, min(100, limit)))
+        if as_json:
+            typer.echo(_json.dumps(rows, ensure_ascii=False, indent=2))
+            return
+        if not rows:
+            typer.echo("  no conversations yet")
+            return
+        for row in rows:
+            usage = row.get("usage") or {}
+            turns = usage.get("turns", 0)
+            typer.echo(
+                f"  {row['id'][:8]}  {_age(row['updated']):>8}  {turns:>3} turn(s)  "
+                f"{row.get('title', 'Conversation')[:70]}"
+            )
+        return
+
+    if action == "search":
+        if not value.strip():
+            typer.echo("search needs a query")
+            raise typer.Exit(1)
+        hits = store.search(value, limit=max(1, min(50, limit)))
+        if as_json:
+            typer.echo(_json.dumps(hits, ensure_ascii=False, indent=2))
+            return
+        for hit in hits:
+            typer.echo(f"  {hit['id'][:8]}  {hit['hits']} hit(s)  {hit['title'][:60]}")
+            typer.echo(f"          {hit['snippet'][:110]}")
+        if not hits:
+            typer.echo("  no matches")
+        return
+
+    if action == "delete":
+        if not value.strip():
+            typer.echo("delete needs a conversation id (see 'hearth chats list')")
+            raise typer.Exit(1)
+        matches = [
+            row
+            for row in store.list_conversations(limit=100)
+            if row["id"] == value or row["id"].startswith(value)
+        ]
+        if not matches:
+            typer.echo(f"no conversation matches {value!r}")
+            raise typer.Exit(1)
+        try:
+            store.delete(matches[0]["id"])
+        except Exception as exc:  # noqa: BLE001 — running turns refuse deletion
+            typer.echo(f"  cannot delete: {exc}")
+            raise typer.Exit(1) from exc
+        typer.echo(f"  deleted {matches[0]['id']}")
+        return
+
+    if action == "export":
+        if not value.strip():
+            typer.echo("export needs a conversation id (see 'hearth sessions list')")
+            raise typer.Exit(1)
+        matches = [
+            row
+            for row in store.list_conversations(limit=100)
+            if row["id"] == value or row["id"].startswith(value)
+        ]
+        if not matches:
+            typer.echo(f"no conversation matches {value!r}")
+            raise typer.Exit(1)
+        key = matches[0]["id"]
+        if as_json:
+            typer.echo(_json.dumps(store.export_json(key), ensure_ascii=False, indent=2))
+            return
+        for chunk in store.export(key):
+            typer.echo(chunk, nl=False)
+        return
+
+    typer.echo("action must be list, search, export or delete")
+    raise typer.Exit(1)
+
+
+@app.command()
+def jobs(
+    action: str = typer.Argument("list", help="list | status | stop"),
+    job_id: str = typer.Argument("", help="Job id for status and stop"),
+) -> None:
+    """See and stop background jobs the chat started with run_command(background)."""
+    import httpx
+
+    s = Settings()
+    base = f"http://{s.daemon.bind}:{s.daemon.port}/api/jobs"
+    try:
+        with httpx.Client(timeout=10) as client:
+            if action == "list":
+                data = client.get(base).json()
+                running = [job for job in data.get("jobs", []) if job["state"] == "running"]
+                for job in data.get("jobs", []):
+                    line = (
+                        f"  {job['state']:<8} {job['id']}  {job['duration_seconds']:>7.1f}s  "
+                        f"{job['argv'][:90]}"
+                    )
+                    if job.get("log_truncated"):
+                        line += "  (log truncated)"
+                    typer.echo(line)
+                if not data.get("jobs"):
+                    typer.echo("  no jobs yet")
+                typer.echo(f"  {len(running)} running · {len(data.get('jobs', []))} total")
+                return
+            if not job_id:
+                typer.echo("job id is required for status and stop")
+                raise typer.Exit(1)
+            if action == "status":
+                job = client.get(f"{base}/{job_id}").json()
+                typer.echo(
+                    f"  {job['state']} · exit {job['exit_code']} · {job['duration_seconds']}s"
+                )
+                typer.echo(f"  {job['argv']}")
+                if job.get("tail"):
+                    typer.echo(job["tail"])
+                return
+            if action == "stop":
+                job = client.post(f"{base}/{job_id}/stop").json()
+                typer.echo(f"  {job['id']} → {job['state']}")
+                return
+    except httpx.HTTPStatusError as exc:
+        typer.echo(f"  {exc.response.status_code}: {exc.response.text}")
+        raise typer.Exit(1) from exc
+    except httpx.HTTPError:
+        typer.echo(f"daemon is not answering at {base.rsplit('/api', 1)[0]} — hearth up daemon")
+        raise typer.Exit(1) from None
+    typer.echo("action must be list, status or stop")
+    raise typer.Exit(1)
+
+
+@app.command()
+def doctor(
+    deep: bool = typer.Option(
+        False, "--deep", help="Also spawn configured MCP servers and list tools"
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Machine-readable findings"),
+) -> None:
+    """Full-system health check. Read-only: no model loads, no config writes."""
+    import json
+
+    from hearthia.doctor import run, worst
+
+    s = Settings()
+    findings = run(s, deep=deep)
+    if as_json:
+        typer.echo(
+            json.dumps(
+                {
+                    "worst": worst(findings),
+                    "findings": [
+                        {"check": f.check, "status": f.status, "detail": f.detail} for f in findings
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+    else:
+        icons = {"ok": "ok  ", "warn": "warn", "fail": "FAIL"}
+        for finding in findings:
+            typer.echo(
+                f"  {icons.get(finding.status, '?   ')}  {finding.check:18} {finding.detail}"
+            )
+    raise typer.Exit(1 if worst(findings) == "fail" else 0)

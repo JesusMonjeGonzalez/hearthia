@@ -4,7 +4,7 @@ import os
 from ipaddress import ip_address
 from pathlib import Path
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -107,14 +107,27 @@ class LoadoutSettings(BaseModel):
 
 
 class MemorySettings(BaseModel):
-    """Unified-memory budget enforcement.
+    """Unified-memory budget and residence policy.
 
     enforce — refuse warm requests that would exceed the wired ceiling
     warn    — allow but surface the budget breach
     off     — advisory only
+
+    Residence policy (applied in enforce and warn modes):
+    max_large_models — large models allowed to stay resident at once; 1 means
+        one big model at a time and is enforced before every warm.
+    helper_max_mib   — resident size under which a model counts as a small
+        helper (embeddings, autocomplete); 0 makes the policy strict.
+    os_reserve_mib   — non-wired RAM kept free for macOS and every other app
+        after a load; wired memory cannot be paged out.
+    swap_warn_mib    — swap already in use beyond this is warned about.
     """
 
     mode: str = "enforce"
+    max_large_models: int = Field(default=1, ge=1, le=4)
+    helper_max_mib: int = Field(default=3072, ge=0, le=16384)
+    os_reserve_mib: int = Field(default=6144, ge=1024, le=32768)
+    swap_warn_mib: int = Field(default=512, ge=0, le=65536)
 
     @model_validator(mode="after")
     def _valid_mode(self) -> "MemorySettings":
@@ -131,6 +144,111 @@ class TreePactSettings(BaseModel):
     loadout: str | None = None
 
 
+HOOK_EVENTS = ("turn_end", "edit")
+
+
+class HookSettings(BaseModel):
+    """A command fired on an agent event, fire-and-forget.
+
+    Hooks are automation (notifications, formatting, logging), not a feedback
+    channel: they never delay a turn, their output goes to Hearthia's log and
+    the recent-run ring, and a failing or slow hook cannot break anything.
+    """
+
+    events: list[str] = Field(min_length=1)
+    command: list[str] = Field(min_length=1)
+    timeout_seconds: int = Field(default=30, ge=1, le=300)
+
+    @model_validator(mode="after")
+    def _known_events(self) -> "HookSettings":
+        unknown = [event for event in self.events if event not in HOOK_EVENTS]
+        if unknown:
+            raise ValueError(f"unknown hook event(s) {unknown}; known: {list(HOOK_EVENTS)}")
+        return self
+
+
+class CheckSettings(BaseModel):
+    """A per-extension check command run after an edit.
+
+    Example: `extensions = ["py"]`, `command = ["ruff", "check", "--quiet",
+    "{file}"]`. `{file}` is the workspace-relative path, substituted literally
+    (no shell). A passing check costs a few tokens; only failures carry
+    bounded output. This is not an LSP: no incremental diagnostics, no type
+    inference — it runs the command the project already trusts.
+    """
+
+    extensions: list[str] = Field(min_length=1)
+    command: list[str] = Field(min_length=1)
+    timeout_seconds: int = Field(default=20, ge=1, le=120)
+
+
+class AgentSettings(BaseModel):
+    """Resource allowances for the agent loop, independent of model RAM.
+
+    max_tool_rounds     — tool rounds per turn before a forced final answer
+                          (local models are slow; a long autonomous task may
+                          legitimately need more than the default 8).
+    turn_budget_minutes — wall-clock cap per turn; 0 disables it. On expiry the
+                          harness forces a final answer instead of failing.
+    keepalive_seconds   — while tools run, ping the model this often so
+                          llama-swap's TTL cannot evict it mid-turn (a test
+                          suite longer than the TTL used to force a reload and
+                          a full re-prefill); 0 disables the keepalive.
+    require_verification — when true, update_plan refuses to mark steps done
+                          while the current turn edited files without running
+                          any command afterwards (warn-only otherwise).
+    subagent_model      — id or alias used for `task` subagents when the RAM
+                          policy allows it (a small helper model makes
+                          exploration far faster); empty keeps the main model.
+    """
+
+    command_memory_mib: int = Field(default=1024, ge=128, le=8192)
+    max_tool_rounds: int = Field(default=8, ge=1, le=48)
+    require_verification: bool = False
+    subagent_model: str = ""
+    compaction: str = "digest"  # digest (deterministic) | model (rolling summary, opt-in)
+
+    @model_validator(mode="after")
+    def _known_compaction(self) -> "AgentSettings":
+        if self.compaction not in ("digest", "model"):
+            raise ValueError("agent.compaction must be 'digest' or 'model'")
+        return self
+
+    checks: list[CheckSettings] = []
+    hooks: list[HookSettings] = []
+    max_jobs: int = Field(default=3, ge=1, le=8)
+    job_max_minutes: int = Field(default=30, ge=1, le=480)
+    job_log_retention_days: int = Field(default=7, ge=0, le=365)
+    turn_budget_minutes: int = Field(default=0, ge=0, le=480)
+    keepalive_seconds: int = Field(default=60, ge=0, le=600)
+
+
+class McpServerSettings(BaseModel):
+    """One stdio MCP server consumed by the chat.
+
+    ``command`` + ``args`` are executed directly (never through a shell) with
+    this user's permissions. Servers are opt-in: nothing is spawned until one
+    is declared here. ``read_only`` marks a server whose tools are safe to
+    expose in Consult mode as well as Develop mode.
+    """
+
+    command: str
+    args: list[str] = []
+    env: dict[str, str] = {}
+    read_only: bool = False
+    timeout_seconds: float = Field(default=30.0, ge=1, le=300)
+
+
+class ChatSettings(BaseModel):
+    """Defaults for `hearth chat`: which model to preload and preselect."""
+
+    default_model: str = ""
+
+
+class McpSettings(BaseModel):
+    servers: dict[str, McpServerSettings] = {}
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="HEARTHIA_",
@@ -143,6 +261,9 @@ class Settings(BaseSettings):
     brain: BrainSettings = BrainSettings()
     memory: MemorySettings = MemorySettings()
     treepact: TreePactSettings = TreePactSettings()
+    agent: AgentSettings = AgentSettings()
+    mcp: McpSettings = McpSettings()
+    chat: ChatSettings = ChatSettings()
     loadouts: dict[str, LoadoutSettings] = {}
     lifecycle: dict[str, str] = {}
 

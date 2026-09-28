@@ -113,7 +113,9 @@ def test_warm_blocked_by_ram_budget(tmp_path, config_path, monkeypatch):
     import hearthia.cli as cli
     from hearthia.budget import WarmDecision
 
-    def blocked(models, candidate_id, running_models, mode, calibration=None, power=None):
+    def blocked(
+        models, candidate_id, running_models, mode, calibration=None, power=None, policy=None
+    ):
         return WarmDecision(
             candidate_id,
             False,
@@ -864,3 +866,407 @@ def test_calibration_command_json(tmp_path, config_path):
     assert result.exit_code == 0
     payload = json.loads(result.output)
     assert payload["big-coder"]["samples"] == 2
+
+
+def _tuned_stack(tmp_path):
+    stack = tmp_path / "tuned-stack"
+    (stack / "models").mkdir(parents=True)
+    (stack / "llama-swap.yaml").write_text(
+        """
+models:
+  "coded":
+    name: "Coded"
+    cmd: |
+      llama-server
+      --model ${models_dir}/coded.gguf
+      --ctx-size 32768
+      --cache-ram 512
+      --cache-reuse 256
+      --spec-type draft-mtp
+      --spec-draft-n-max 3
+    ttl: 300
+    aliases: [cd]
+    metadata:
+      roles: [chat]
+"""
+    )
+    (stack / "spec_decode.json").write_text(
+        json.dumps(
+            {
+                "coded": {
+                    "draft_tokens": 1_000,
+                    "accepted_tokens": 100,
+                    "last_draft_counter": 0,
+                    "last_accepted_counter": 0,
+                }
+            }
+        )
+    )
+    (stack / "usage.json").write_text(
+        json.dumps(
+            {
+                "coded": {
+                    "prompt_tokens": 42_000,
+                    "completion_tokens": 3_100,
+                    "max_context_observed": 20_000,
+                    "last_prompt_counter": 0,
+                    "last_completion_counter": 0,
+                }
+            }
+        )
+    )
+    cfg = tmp_path / "tune-config.toml"
+    cfg.write_text(f'[paths]\nstack_dir = "{stack}"\n')
+    return {"HEARTHIA_CONFIG": str(cfg)}
+
+
+def test_tune_advises_from_measured_ledgers(tmp_path):
+    env = _tuned_stack(tmp_path)
+    result = runner.invoke(app, ["tune", "cd"], env=env)  # alias, not id
+    assert result.exit_code == 0
+    assert "acceptance 10%" in result.output and "lowering" in result.output
+    assert "no usage recorded yet" not in result.output
+    assert "20,000 tok" in result.output
+    assert "nothing was modified" in result.output
+
+
+def test_tune_is_honest_without_data(tmp_path, config_path):
+    result = runner.invoke(app, ["tune"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "not configured" in result.output  # fixture cmd has no spec flags
+    assert "no usage recorded yet" in result.output
+    assert "no measured acceptance yet" not in result.output
+
+
+def test_tune_resolves_aliases(tmp_path, config_path):
+    result = runner.invoke(app, ["tune", "coder"], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "big-coder" in result.output
+
+
+# ── hearth chat ─────────────────────────────────────────────────────────────
+
+
+def test_chat_prints_and_opens_the_deep_link_without_touching_services(
+    tmp_path, config_path, monkeypatch
+):
+    import webbrowser
+
+    from hearthia import cli as cli_module
+
+    opened = {}
+    monkeypatch.setattr(webbrowser, "open", lambda url: opened.setdefault("url", url))
+    # Services already answer: no launchctl, no warm.
+    monkeypatch.setattr(cli_module.httpx, "get", lambda *a, **k: _Status(200))
+    result = runner.invoke(
+        app,
+        ["chat", "-w", str(tmp_path), "-m", "coder", "--no-warm"],
+        env=_env(tmp_path, config_path),
+    )
+    assert result.exit_code == 0
+    assert "?chat=1&workspace=" in result.output
+    assert "mode=build" in result.output
+    assert opened["url"].startswith("http://127.0.0.1:9300/?chat=1")
+    assert "big-coder" in opened["url"]  # alias resolved to the real id
+
+
+def test_chat_defaults_to_the_configured_model_and_no_open(tmp_path, config_path, monkeypatch):
+    from hearthia import cli as cli_module
+
+    stack = tmp_path / "stack"
+    config = tmp_path / "hearthia-config.toml"
+    config.write_text(f'[paths]\nstack_dir = "{stack}"\n[chat]\ndefault_model = "big-coder"\n')
+    monkeypatch.setattr(cli_module.httpx, "get", lambda *a, **k: _Status(200))
+    result = runner.invoke(
+        app,
+        ["chat", "-w", str(tmp_path), "--no-warm", "--no-open"],
+        env={"HEARTHIA_CONFIG": str(config)},
+    )
+    assert result.exit_code == 0
+    assert "model=big-coder" in result.output
+    assert "open that URL in your browser" in result.output
+
+
+def test_chat_rejects_a_bad_workspace(tmp_path, config_path):
+    missing = tmp_path / "nope"
+    result = runner.invoke(app, ["chat", "-w", str(missing)], env=_env(tmp_path, config_path))
+    assert result.exit_code == 1
+    assert "not a directory" in result.output
+    result = runner.invoke(
+        app, ["chat", "-w", str(tmp_path), "--mode", "wat"], env=_env(tmp_path, config_path)
+    )
+    assert result.exit_code == 1 and "read or build" in result.output
+
+
+class _Status:
+    def __init__(self, code):
+        self.status_code = code
+
+
+def test_bare_hearth_goes_straight_to_chat(tmp_path, config_path, monkeypatch):
+    import webbrowser
+
+    from hearthia import cli as cli_module
+
+    opened = {}
+    monkeypatch.setattr(webbrowser, "open", lambda url: opened.setdefault("url", url))
+    monkeypatch.setattr(cli_module.httpx, "get", lambda *a, **k: _Status(200))
+    # A bare invocation (no verb, no flags) routes straight to the chat flow.
+    result = runner.invoke(app, [], env=_env(tmp_path, config_path))
+    assert result.exit_code == 0
+    assert "?chat=1&workspace=" in result.output
+    assert opened["url"].startswith("http://127.0.0.1:9300/?chat=1")
+
+
+def test_hearth_go_is_the_short_alias(tmp_path, config_path, monkeypatch):
+    from hearthia import cli as cli_module
+
+    monkeypatch.setattr(cli_module.httpx, "get", lambda *a, **k: _Status(200))
+    result = runner.invoke(
+        app, ["go", "--no-warm", "--no-open", "-w", str(tmp_path)], env=_env(tmp_path, config_path)
+    )
+    assert result.exit_code == 0
+    assert "?chat=1&workspace=" in result.output
+
+
+def test_bare_hearth_without_services_tells_you_to_install(tmp_path, config_path, monkeypatch):
+    import httpx as real_httpx
+
+    def _down(*args, **kwargs):
+        raise real_httpx.ConnectError("down")
+
+    from hearthia import cli as cli_module
+
+    monkeypatch.setattr(cli_module.httpx, "get", _down)
+    monkeypatch.setattr(
+        "pathlib.Path.home",
+        classmethod(lambda cls: tmp_path),  # no LaunchAgents there
+    )
+    result = runner.invoke(app, [], env=_env(tmp_path, config_path))
+    assert result.exit_code == 1
+    assert "not installed" in result.output
+
+
+def test_chat_new_flag_deep_links_a_fresh_conversation(tmp_path, config_path, monkeypatch):
+    from hearthia import cli as cli_module
+
+    monkeypatch.setattr(cli_module.httpx, "get", lambda *a, **k: _Status(200))
+    result = runner.invoke(
+        app,
+        ["chat", "--new", "--no-warm", "--no-open", "-w", str(tmp_path)],
+        env=_env(tmp_path, config_path),
+    )
+    assert result.exit_code == 0
+    assert "&new=1" in result.output
+
+
+def test_tune_suggests_a_subagent_helper_when_unset(tmp_path):
+    """A real (sparse) GGUF header makes the estimate known, as in production."""
+    from hearthia.demo import write_demo_gguf_shell
+
+    stack = tmp_path / "tune-stack"
+    models_dir = stack / "models"
+    models_dir.mkdir(parents=True)
+    write_demo_gguf_shell(
+        models_dir / "small.gguf",
+        {
+            "block_count": 16,
+            "head_count": 8,
+            "head_count_kv": 2,
+            "key_length": 64,
+            "value_length": 64,
+            "context_length": 32768,
+        },
+        total_size=800 * 1024**2,
+    )
+    (stack / "llama-swap.yaml").write_text(
+        """
+macros:
+  models_dir: """
+        + str(models_dir)
+        + """
+models:
+  "big":
+    name: "Big"
+    cmd: |
+      llama-server
+      --model ${models_dir}/big.gguf
+      --ctx-size 32768
+    metadata:
+      roles: [chat]
+  "small":
+    name: "Small"
+    cmd: |
+      llama-server
+      --model ${models_dir}/small.gguf
+      --ctx-size 32768
+    metadata:
+      roles: [chat]
+"""
+    )
+    cfg = tmp_path / "cfg.toml"
+    cfg.write_text(f'[paths]\nstack_dir = "{stack}"\nmodels_dir = "{models_dir}"\n')
+    result = runner.invoke(app, ["tune"], env={"HEARTHIA_CONFIG": str(cfg)})
+    assert result.exit_code == 0
+    assert "subagent_model is unset" in result.output
+    assert "'small'" in result.output
+
+
+# ── hearth jobs ─────────────────────────────────────────────────────────────
+
+
+def test_hearth_jobs_lists_status_and_stops(tmp_path, config_path, monkeypatch):
+    import respx
+
+    daemon = "http://127.0.0.1:9300"
+    with respx.mock:
+        respx.get(f"{daemon}/api/jobs").respond(
+            200,
+            json={
+                "running": 1,
+                "jobs": [
+                    {
+                        "id": "a1",
+                        "state": "running",
+                        "duration_seconds": 3.2,
+                        "argv": "pytest -q",
+                        "log_bytes": 10,
+                        "exit_code": None,
+                    },
+                    {
+                        "id": "b2",
+                        "state": "failed",
+                        "duration_seconds": 9.0,
+                        "argv": "make test",
+                        "log_bytes": 99,
+                        "exit_code": 2,
+                    },
+                ],
+            },
+        )
+        respx.get(f"{daemon}/api/jobs/a1").respond(
+            200,
+            json={
+                "id": "a1",
+                "state": "running",
+                "exit_code": None,
+                "duration_seconds": 3.2,
+                "argv": "pytest -q",
+                "tail": "collecting…",
+            },
+        )
+        respx.post(f"{daemon}/api/jobs/a1/stop").respond(200, json={"id": "a1", "state": "killed"})
+
+        listed = runner.invoke(app, ["jobs"], env=_env(tmp_path, config_path))
+        assert listed.exit_code == 0
+        assert "a1" in listed.output and "failed" in listed.output
+        assert "1 running · 2 total" in listed.output
+
+        status = runner.invoke(app, ["jobs", "status", "a1"], env=_env(tmp_path, config_path))
+        assert status.exit_code == 0
+        assert "collecting…" in status.output
+
+        stopped = runner.invoke(app, ["jobs", "stop", "a1"], env=_env(tmp_path, config_path))
+        assert stopped.exit_code == 0 and "killed" in stopped.output
+
+
+def test_hearth_jobs_without_a_daemon_is_honest(tmp_path, config_path):
+    # The developer's real daemon may be up on 9300: point at a closed port.
+    env = {**_env(tmp_path, config_path), "HEARTHIA_DAEMON__PORT": "9"}
+    result = runner.invoke(app, ["jobs"], env=env)
+    assert result.exit_code == 1
+    assert "daemon is not answering" in result.output
+
+
+# ── hearth chats ─────────────────────────────────────────────────────────
+
+
+def _seed_conversations(tmp_path, config_path):
+    from hearthia.conversations import ConversationStore
+
+    # The same stack dir `_env` gives the CLI: never the developer's home.
+    store = ConversationStore(config_path.parent / "conversations.sqlite3")
+    key = store.create({"title": "Refactor de pagos"})["id"]
+    store.append(key, {"role": "user", "content": "arregla el bucle de reintentos"})
+    store.append(key, {"role": "assistant", "content": "hecho", "model": "rvn"})
+    store.note_usage(
+        key,
+        {"input_tokens": 100, "allowance_tokens": 1000, "prompt_tokens": 120, "output_tokens": 30},
+    )
+    return key
+
+
+def test_chats_list_search_and_export(tmp_path, config_path):
+    env = _env(tmp_path, config_path)
+    key = _seed_conversations(tmp_path, config_path)
+
+    listed = runner.invoke(app, ["chats"], env=env)
+    assert listed.exit_code == 0
+    assert "Refactor de pagos" in listed.output and "1 turn(s)" in listed.output
+
+    found = runner.invoke(app, ["chats", "search", "reintentos"], env=env)
+    assert found.exit_code == 0 and "1 hit(s)" in found.output and "reintentos" in found.output
+
+    missing = runner.invoke(app, ["chats", "search", "inexistente"], env=env)
+    assert missing.exit_code == 0 and "no matches" in missing.output
+
+    exported = runner.invoke(app, ["chats", "export", key[:8]], env=env)
+    assert exported.exit_code == 0
+    assert "arregla el bucle de reintentos" in exported.output
+    assert "assistant" in exported.output
+
+    as_json = runner.invoke(app, ["chats", "export", key, "--json"], env=env)
+    assert as_json.exit_code == 0
+    assert json.loads(as_json.output)["conversation"]["id"] == key
+
+    bad = runner.invoke(app, ["chats", "export", "nope"], env=env)
+    assert bad.exit_code == 1 and "no conversation matches" in bad.output
+
+
+def test_chats_delete_removes_a_conversation(tmp_path, config_path):
+    env = _env(tmp_path, config_path)
+    key = _seed_conversations(tmp_path, config_path)
+
+    deleted = runner.invoke(app, ["chats", "delete", key[:8]], env=env)
+    assert deleted.exit_code == 0 and "deleted" in deleted.output
+    assert runner.invoke(app, ["chats"], env=env).output.count(key[:8]) == 0
+    missing = runner.invoke(app, ["chats", "delete", "nope"], env=env)
+    assert missing.exit_code == 1 and "no conversation matches" in missing.output
+
+
+def test_status_json_from_the_daemon(tmp_path, config_path):
+    import respx
+
+    env = _env(tmp_path, config_path)
+    with respx.mock:
+        respx.get("http://127.0.0.1:9300/api/status").respond(
+            200, json={"version": "9.9.9", "running": [], "jobs_running": 2, "system": {}}
+        )
+        result = runner.invoke(app, ["status", "--json"], env=env)
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["version"] == "9.9.9" and payload["jobs_running"] == 2
+
+
+def test_status_json_degrades_locally_when_the_daemon_is_down(tmp_path, config_path):
+    # The developer's real daemon may be up: point at a closed port.
+    env = {**_env(tmp_path, config_path), "HEARTHIA_DAEMON__PORT": "9"}
+    result = runner.invoke(app, ["status", "--json"], env=env)
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["daemon"] == "down"
+    assert payload["memory"]["total"] > 0
+
+
+def test_advise_resolves_aliases_and_reports_unknown(tmp_path, config_path):
+    import respx
+
+    env = _env(tmp_path, config_path)
+    with respx.mock:
+        respx.get(f"{GW}/running").respond(200, json={"running": []})
+        good = runner.invoke(app, ["advise", "coder"], env=env)  # alias of big-coder
+        assert good.exit_code == 0
+        assert "unknown model" not in good.output
+        bad = runner.invoke(app, ["advise", "nope"], env=env)
+        assert bad.exit_code == 1
+        assert "unknown model(s): nope" in bad.output

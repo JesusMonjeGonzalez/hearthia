@@ -1,5 +1,349 @@
 # Changelog
 
+## 0.6.0 — 2026-09-28
+
+### Added
+
+- **Job-log retention:** job logs are pruned at startup and whenever a job
+  starts — the newest 20 and anything younger than
+  `[agent] job_log_retention_days` (default 7, 0 disables) survive; unbounded
+  disk growth is not a feature.
+- **`hearth up` is honest when a service already runs** (`up … (already
+  running)` instead of silently swallowing the bootstrap error).
+
+### Fixed
+
+- A refused model load keeps its reason **readable in the model card**
+  (reserve, resident model, ceiling) instead of a vanishing `alert()` with the
+  raw `{"detail": …}`; API error bodies are parsed into the sentence a human
+  should read (pure `errorMessage` helper, unit-tested).
+
+- `hearth advise` now resolves model aliases (like warm/tune) and reports
+  unknown ids instead of silently planning around them.
+- `hearth advise` can no longer contradict the residency policy: the same
+  one-large-model rule the warm gate enforces is checked against every
+  change-set, with an explicit note (`the RAM budget may allow this set, but
+  [memory].max_large_models=1 does…`) in both human and `--json` output.
+
+- `turn_end` hooks no longer fire for requests that never became a turn
+  (client disconnect before consuming the stream, refused turns).
+
+### Changed
+
+- Develop-mode instructions now carry a short workflow line — plan first,
+  mark steps done, delegate exploratory reading to `task`, run long checks
+  with `background=true` — so a local model picks the right tool instead of
+  discovering it. It is part of the pinned system prefix, cached after the
+  first request.
+
+- Paging to older messages no longer yanks the transcript to the bottom: the
+  log lands at the top of the page you asked for (verified in the browser).
+
+- **Verification-aware auto-continue:** when the previous turn edited files
+  without running a check, the automatic continuation asks to run the pending
+  verification before the next plan step instead of blindly moving on.
+- **`hearth chats delete <id>`** and **`hearth status --json`** (the daemon's
+  full snapshot, or a local memory-only fallback when it is down).
+
+- **`hearth chats`**: list, full-text search and export conversations from the
+  terminal (markdown or `--json`), reading the SQLite store directly — no
+  daemon, no model tokens. `sessions` was taken by the loadout history.
+- The rolling compaction summary now waits for the chat to fall idle
+  (bounded) instead of racing a user turn: with `--parallel 1` it used to sit
+  in front of your next round.
+
+### Fixed
+
+- Test isolation: the autouse fixture now *writes* a sandbox config, so a
+  default `stack_dir` can never resolve to `~/.hearthia` and collect test data
+  (a new test did exactly that; the rows were removed and the guard added).
+
+- **Friendlier failure surfaces:** a gateway that is down now says
+  `gateway is not answering at … — start it with 'hearth up gateway'` instead
+  of a bare `Errno 61`, timeouts and HTTP errors get their own sentence, and
+  the text is recorded in the transcript. `GET /api/status` reports
+  `jobs_running` and `hooks_configured`.
+- **Chat shortcuts:** `Esc` stops a running turn and `Cmd/Ctrl+K` starts a new
+  conversation (never while a turn is streaming).
+
+- **Opt-in model compaction (`[agent] compaction = "model"`)**: dropped turns
+  get a rolling 200-word summary produced by the model in a background task
+  (input ≤10 KB, output ≤400 tokens), merged with the previous summary and
+  stored in the conversation metadata; the deterministic digest remains the
+  fallback and still covers the newest drops. Packing prefers the model
+  summary when present, bounded at 2.6 KB alongside a tail of recent stubs.
+
+- **Per-conversation usage panel** in the chat: turns, last/peak input vs the
+  allowance, prompt/output totals, growth per turn, projected turns until
+  trimming, and the last round's prefill/cache/tok-s (pure `usageSummary`
+  module, unit-tested; zero model tokens). Markdown exports now name the
+  model (and its tok/s) for every assistant message, and `hearth doctor`
+  reports recorded background jobs from the state file.
+
+- **Long-run token economy:** `update_plan` echoes the step list only when it
+  changes (status-only updates return a compact ack), and tool results carry a
+  short `pacing` note during the last three rounds of a turn so the model
+  wraps up instead of being cut off. Both measured against a real autonomous
+  run.
+
+- **Hooks (`[[agent.hooks]]`)**: fire-and-forget commands on `turn_end` and
+  `edit` with a JSON payload on stdin. Never delay a turn, never touch the
+  conversation, bounded (4 concurrent, timeout+process-group kill, 20-run
+  ring), failing hooks recorded and ignored, unknown event names rejected at
+  load. Visible via `GET /api/hooks` and `hearth doctor`; hot-reloadable.
+
+- **Human visibility for background jobs:** `GET /api/jobs`,
+  `GET /api/jobs/{id}` (bounded tail) and `POST /api/jobs/{id}/stop`; a
+  `hearth jobs [list|status|stop]` CLI; and a chat line with a stop button per
+  running job, polled only while something runs. Previously only the model
+  could see or stop jobs.
+- Search's LIKE fallback escapes `%` and `_`, so a query like `100%` is
+  literal instead of matching everything.
+
+- **Transcript transparency:** every assistant message records which model
+  produced it (mixed-model sessions are otherwise indistinguishable) and the
+  chat shows it with the per-turn tok/s; JSON exports carry it too. Tool
+  results for `task`, `job`, `plan` and MCP now render as structured cards
+  (subagent header as title, job state/exit/tail, plan checklist with
+  progress) instead of generic text.
+- **`hearth tune` suggests a subagent helper** when `[agent] subagent_model`
+  is unset and a model fits within the helper cap — on a real sparse GGUF it
+  reads, for example: `'qwen2.5-coder-1.5b' (2.1 GiB) fits as a helper…`.
+
+- **Dedicated subagent model:** `[agent] subagent_model` (id or alias, e.g.
+  the 1.5B helper) is used for `task` subagents when the RAM policy allows a
+  helper alongside the one large model; otherwise the task falls back to the
+  main model and the report says why. The report header names the model that
+  actually ran.
+- **`hearth chat --new`:** deep-links a fresh conversation instead of resuming
+  the last one. Fixed the demo/daemon job-state write when no job directory
+  exists yet.
+
+- **Background jobs:** `run_command(background=true)` starts a detached
+  command that logs to a file, plus a `job` tool (`list`/`status`/`wait` ≤120 s
+  /`stop`) that only ever shows a bounded 2 KB tail. Bounded by concurrent-job
+  count, a hard lifetime (state `timeout`), a capped log that is still drained,
+  process-group kills, shutdown cleanup and startup reaping of a previous
+  daemon's leftovers (pid reuse guarded by spawn time).
+- **Hot config reload:** `POST /api/config/reload` re-reads config.toml,
+  applies agent/memory/brain sections, rebuilds MCP when its servers changed,
+  updates job limits, reports the diff, and leaves the running settings
+  untouched when the file does not parse.
+
+- **Configured per-edit checks:** `[[agent.checks]]` maps extensions to a
+  command (with `{file}`), run after every successful edit under the same
+  process-group/RSS/deadline limits as any command. A pass costs ~10 tokens; a
+  failure adds a bounded (2 KB) `check` dict to the edit result so the model
+  fixes it in the same round. Not an LSP, never blocks an edit, and automatic
+  checks deliberately do not satisfy the verification gate.
+
+- **Verification gate on `update_plan`:** marking steps done while the current
+  turn edited files with no command afterwards now adds a structured
+  `warning` to the tool result (default) or **refuses the update** with
+  `[agent] require_verification = true`, leaving the plan untouched until a
+  check runs. Reads-only and verified turns are unaffected; zero token cost
+  unless there is a mismatch to report.
+
+- **Subagents (`task` tool, Develop mode):** delegate read-only exploration to
+  a nested loop with a disposable context (own small message list, rounds cap
+  6/12, 40 KB context, 12 KB per tool result, 4,000-char report labelled with
+  how it ended). Edits, nesting and MCP are refused by the executor, not just
+  hidden from the schemas. Same model, sequential, token usage accounted to
+  the turn. Raw dumps and test logs never enter the main prompt — the main
+  window is what local prefill makes expensive. See `docs/SUBAGENTS.md`.
+
+- **Long-run quality:** the compaction digest now keeps a 150-char conclusion
+  stub per dropped assistant turn (findings survive, not just tool history);
+  `update_plan` accepts a `done` list of finished steps, shown in the
+  dashboard checklist (`n/m done`, ✔/○) and usable for **auto-continue** — an
+  opt-in toggle that submits continuation turns while the plan has pending
+  steps, capped at 8, stopped by any failure/Stop and reset by a manual
+  message. The pinned plan block stays steps-only, so status flips never shift
+  the cached prefix.
+
+- **`hearth doctor` (zero model tokens, read-only)**: full-system health check
+  with honest ok/warn/fail findings — config and YAML parsing, model files on
+  disk, configured binary, llama-swap on PATH, models dir, gateway and daemon
+  reachability + launchd state, live memory/swap/wired ceiling with a
+  cold-start fit for the largest model, disk space, conversations DB integrity
+  and search-mirror sync, ledger validity, configured MCP servers (with
+  `--deep` to actually spawn them and list tools), and loadout drift warnings.
+  `--json` for machines, exit code 1 on any failure. Replaces the old,
+  narrower doctor and keeps its checks.
+
+- **Re-read shortcut (token-free):** full-file reads whose byte-identical
+  content is already in the prompt (sha256 match) are answered with a
+  three-line note instead of resending the file. Range reads, changed files
+  and files known only through an edit diff always read in full, so
+  exact-match editing is never taken away. The probe is a bounded worker call
+  and never an inference.
+
+- **Full-text search across all conversations** (zero model tokens): an FTS5
+  mirror kept in sync on append/checkpoint/delete with a one-time backfill,
+  a LIKE fallback when FTS5 is unavailable, sanitised AND-ed queries,
+  per-conversation grouping with highlighted snippets and a jump-to-message
+  result list in the dashboard (`GET /api/conversations/search`).
+
+- **Cheap syntax feedback on edits:** `.py`/`.json`/`.toml` files are parsed
+  locally after every edit; failures add a compact `syntax_error` note to the
+  tool result (no inference, no tokens when clean) so the model fixes a broken
+  file in the same round. The edit is never blocked and the dashboard marks
+  the card as failed. Plans are now shown as a collapsible checklist in the
+  chat, reading the stored metadata at zero token cost.
+
+- **Retry and fork.** `POST /api/conversations/{id}/retry` forks without the
+  last user turn and returns the message for re-submission; `POST …/fork`
+  copies any prefix into an independent conversation with `forked_from`
+  provenance. Both refuse while the source is running; the original is never
+  rewritten. Dashboard buttons included.
+- **Verification marker.** Each turn records edited paths and whether a
+  command ran after the last edit; the chat shows an amber "Unverified" line
+  when an edit ended the turn without a check. Stored in conversation
+  metadata (`last_turn`) and documented as "command ran after edit" — not as
+  proof the change was tested.
+
+- **Long-session guards** (`docs/LONG-SESSIONS.md`): a keepalive ping while
+  tools run so llama-swap's TTL cannot evict the model mid-turn (measured:
+  countdown reset from 4m17s to 4m58s with pings), configurable
+  `max_tool_rounds` (1..48) and `turn_budget_minutes` with a graceful forced
+  final round, a persistent `update_plan` tool whose steps stay pinned across
+  context trimming, and a no-progress guard that flags the third identical
+  execution of a failing call.
+
+- **Pinned project block:** the workspace snapshot (repo map, AGENTS.md) now
+  sits at a stable position after the system message and is reused
+  byte-for-byte while its signature is unchanged; a change rebuilds it once.
+  Previously it trailed each turn, so ~1,600 tokens were re-prefilled per
+  turn. Memory is bounded to 64 sessions, oldest evicted.
+- **Per-element prompt accounting** (`element_tokens`, `tools_schema_tokens`)
+  in the context event and the chat tooltip, plus the `hearth tune` advisor:
+  spec-decode acceptance, KV size vs `--cache-ram`, prompt-cache reuse,
+  observed peak context and calibration, all read-only with honest
+  "no data yet" answers.
+
+- **Harness compaction:** dropped turns leave a bounded deterministic digest
+  (question stubs plus tool outcomes: command exit codes, edited paths, MCP
+  calls) instead of vanishing, merges across packings, and is the last thing
+  to give way. Drops now free room down to 85% of the budget (hysteresis) so
+  the cached prefix is not shifted on the next turn.
+- **Window usage ledger per conversation:** each turn records input/allowance,
+  prompt and output tokens in the conversation metadata; `GET
+  /api/conversations/{id}` returns occupancy, remaining tokens, observed
+  growth per turn and projected turns until trimming. The chat shows it under
+  the activity line.
+- Token-aware room for appended tool results (same ratio as the window budget).
+
+- **MCP client:** `[mcp.servers.*]` stdio servers are discovered at turn start
+  and exposed to the chat as `mcp__<server>__<tool>` (64-char wire names with
+  stable hash suffixes). Consult mode only sees servers marked
+  `read_only = true`; the executor refuses mutating servers there even if the
+  model calls them. Per-request deadlines restart a stuck server, crashes are
+  reported with stderr context and recovered on the next call, and shutdown
+  reaps every process group. See `docs/MCP-CLIENT.md`.
+- Independent read-only tools in one round now run **concurrently** (bounded to
+  4, results kept in call order); mutating tools stay strictly sequential and
+  are never deduplicated.
+
+- **Residency policy** (`[memory]` in config.toml): one large model resident at
+  a time, a size cap for small helpers (embeddings/autocomplete), a non-wired
+  OS/apps reserve checked after every load, swap-in-use warnings, and
+  fail-closed refusal when the gateway inventory is unknown. An already-warm
+  candidate is never charged twice and is always allowed. Wired into the CLI,
+  daemon lifecycle followers, loadouts, MCP warm tool, rehearsal and chat.
+- `hearth warm` and the dashboard now print/return the policy line, measured
+  headroom and swap figure with each decision; `GET /api/status` exposes
+  `memory_policy`, `swap_total` and the `sampled_at` instant; the vitals strip
+  shows swap used/total, data age and the active policy.
+- Measured baseline for the production `qwen3.8-27b-rvn` at 64K: 19.33 GiB
+  resident, 8.67 GiB under the 28 GiB wired ceiling, 16.67 GiB left for
+  macOS/apps (6 GiB reserve), swap 0 — see `docs/MEMORY-POLICY.md`.
+
+- **Cache-friendly prompt structure:** project context (repo map, AGENTS.md,
+  workspace note) moved from the system message to the newest user turn;
+  context is packed once per turn and every later round is append-only; the
+  turn never rewrites already-sent messages (oversized new tool results are
+  truncated with an explicit note, and a spilled turn runs one final tool-less
+  round before failing honestly). llama.cpp `timings` (`prompt_n`, `cache_n`,
+  tok/s) are stored per assistant message and shown in the chat status line.
+- **Machine-readable export:** `GET /api/conversations/{id}/export?format=json`
+  returns every message, tool call, timing and error for other tools.
+- `scripts/bench-prompt-cache.py` measures real prompt-cache reuse of a warm
+  model through the gateway (refuses to load anything itself).
+
+### Fixed
+
+- A background job whose log hit the size cap lost the *end* of its output —
+  exactly where errors are. A bounded 8 KB in-memory tail now survives the cap
+  and `job(status)` prefers it when the log was truncated.
+- An MCP server that was down when the daemon started was never retried until
+  a restart. Discovery now re-attempts failed servers with a 60 s cooldown, so
+  a hanging server cannot cost every turn its timeout, and recovery is automatic.
+- An oversized stored compaction summary could exceed the digest budget; it is
+  truncated at use and stored capped at 2.4 KB.
+
+- The `job` tool now requires Develop mode like every other background-capable
+  tool: a model in Consult mode could previously stop jobs it could not start.
+- `GET /api/status` reports the daemon's code version and `hearth doctor`
+  compares it with the installed package, flagging a daemon left running stale
+  code after an update (`hearth restart daemon`) — found the hard way while
+  developing, now a one-line warning.
+
+- **Command PATH under launchd:** spawned commands prepend the workspace's
+  `.venv/bin`, `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`, so a
+  plain `python` resolves as it does in your shell; a missing executable now
+  reports `not found` with the searched PATH and exits 127 instead of dumping
+  an exec traceback. Both found by a real autonomous run on this machine.
+
+- Process-group cleanup tolerates `EPERM` as well as `EPLR` from `killpg`
+  (zombie leaders and groups the OS refuses to signal) — cleanup must never
+  crash — and the hook runner's timeout path no longer lets a `CancelledError`
+  escape from a cancelled subprocess wait: the wait is shielded, the output
+  drain is its own task, and `close()` kills running hook processes before
+  cancelling their tasks. A transient spawn failure under load now gets one
+  quiet retry. Verified with eight consecutive full-suite runs.
+
+- Exact prompt measurement behind llama-swap: `/tokenize` and
+  `/apply-template` are only exposed under `/upstream/<model>/…`, so the
+  measurement now routes there (falling back to the byte estimate when the
+  stack does not offer them at all). Verified against a live session.
+- `scripts/bench-prompt-cache.py` cache-hit maths (divided by the delta
+  instead of the total prompt) and a status test that only passed because the
+  real gateway port happened to be closed.
+
+- `plan_warm` costed an already-resident candidate twice (once as measured
+  resident, once as new estimate), which could refuse a warm that needed no
+  new allocation at all — chat mid-turn checks were the most exposed path.
+
+- Explicit Develop mode with workspace-bound exact edits, atomic no-overwrite
+  creation, persisted diffs and foreground executable/argument tools.
+- Command exit codes, bounded head/tail output, CPU/wall limits, configurable
+  sampled RSS allowance and process-group cleanup on Stop or completion.
+- Read hashes, failed/passed command cards, and a real edit/fail/fix/test browser
+  workflow using scripted model decisions and real subprocesses.
+- Durable SQLite chat sessions with revision checks, streaming checkpoints,
+  interrupted-turn recovery, paginated history and complete Markdown export.
+- Explicit, idempotent import of legacy browser conversations without deleting
+  the originals; the dashboard now keeps only one message page in memory.
+- Workspace selection, root AGENTS.md context and line-range file reads.
+- Disposable filesystem workers with CPU/wall deadlines, bounded output and
+  process-group termination on cancellation.
+- Model-aware conservative context packing, preserved tool-call/result pairs,
+  visible omissions and tool shortening without rewriting stored transcripts.
+- Structured tool activity and a real-browser test using an isolated demo daemon.
+
+### Fixed
+
+- Mutating tools invalidate read deduplication; repeat commands run again after
+  fixes. Malformed duplicate tool IDs cannot execute a batch of edits.
+- Browser-history imports retain their original IDs across the mode-schema
+  upgrade and cannot implicitly grant Develop capabilities.
+- Chat checks memory admission per inference round, limits concurrent turns,
+  avoids implicit semantic indexing, and persists upstream stream failures.
+- Streaming handles split Unicode and bounded buffers; attachment reads and
+  transcript rendering are bounded, and Stop releases tool processes.
+- Log streaming rejects gateway HTTP errors instead of displaying their response
+  bodies as log lines; the dashboard shows the existing unavailable-gateway notice.
+
 ## 0.5.0 — 2026-09-01
 
 ### Added

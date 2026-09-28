@@ -33,3 +33,9 @@ document.querySelectorAll(".tab").forEach((t) =>
 
 /* ── boot ── */
 refreshAll();
+
+// `hearth chat` deep-links here: open the chat panel directly.
+const params = new URLSearchParams(location.search);
+if (params.get("chat") === "1") {
+  document.querySelector('.tab[data-tab="chat"]')?.click();
+}

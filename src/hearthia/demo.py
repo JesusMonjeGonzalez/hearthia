@@ -19,12 +19,16 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from hearthia.conversations import ConversationStore
 from hearthia.gateway import Gateway
+from hearthia.hooks import HookRunner
+from hearthia.jobs import JobRegistry
+from hearthia.mcp_client import McpManager
 from hearthia.registry import Registry
 from hearthia.settings import BrainSettings, MemorySettings, PathsSettings, Settings
 from hearthia.telemetry import Telemetry
 
-from .api import brain, chat, config, context, library, logs, models
+from .api import brain, chat, config, context, conversations, hooks, jobs, library, logs, models
 
 log = logging.getLogger("hearthia.demo")
 
@@ -354,7 +358,13 @@ def create_demo_app(demo_dir: Path | None = None, port: int = DEMO_PORT) -> Fast
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        yield
+        app.state.conversations.recover()
+        try:
+            yield
+        finally:
+            await app.state.hooks.close()
+            await app.state.jobs.close()
+            await app.state.mcp.close()
 
     app = FastAPI(title="Hearthia Demo", lifespan=lifespan)
     app.state.gateway = gw
@@ -362,6 +372,10 @@ def create_demo_app(demo_dir: Path | None = None, port: int = DEMO_PORT) -> Fast
     app.state.telemetry = tel
     app.state.settings = settings
     app.state.demo = True
+    app.state.conversations = ConversationStore(settings.paths.stack_dir / "conversations.sqlite3")
+    app.state.mcp = McpManager(None)
+    app.state.jobs = JobRegistry(settings.paths.stack_dir / "jobs")
+    app.state.hooks = HookRunner(list(settings.agent.hooks))
 
     allowed_origins = {
         f"http://127.0.0.1:{port}",
@@ -378,6 +392,9 @@ def create_demo_app(demo_dir: Path | None = None, port: int = DEMO_PORT) -> Fast
     app.include_router(models.router)
     app.include_router(config.router)
     app.include_router(chat.router)
+    app.include_router(conversations.router)
+    app.include_router(jobs.router)
+    app.include_router(hooks.router)
     app.include_router(logs.router)
     app.include_router(brain.router)
     app.include_router(context.router)

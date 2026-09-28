@@ -29,6 +29,30 @@ def test_parse_rule_strips_whitespace():
     assert target == "Cursor"
 
 
+def _config_with_fim(config_path):
+    """The shared fixture has no autocomplete model; add one for the rule tests.
+
+    The budget gate refuses to warm an id it cannot find in the config, so a
+    rule pointing at an unconfigured model no longer reaches the gateway.
+    """
+    config_path.write_text(
+        config_path.read_text()
+        + """
+  "tiny-fim":
+    name: "Tiny FIM"
+    description: "Autocomplete."
+    cmd: |
+      ${llama-server}
+      --port ${PORT}
+      --model ${models_dir}/fim.gguf
+      --ctx-size 8192
+    metadata:
+      roles: [autocomplete]
+"""
+    )
+    return config_path
+
+
 @respx.mock
 async def test_tick_warms_autocomplete_when_app_running(config_path, backups_dir):
     respx.get(f"{BASE}/running").respond(
@@ -37,7 +61,7 @@ async def test_tick_warms_autocomplete_when_app_running(config_path, backups_dir
     warm_route = respx.get(f"{BASE}/upstream/tiny-fim/health").respond(200)
 
     gw = Gateway(BASE)
-    reg = Registry(config_path, backups_dir)
+    reg = Registry(_config_with_fim(config_path), backups_dir)
     tel = Telemetry(gw)
     rules = {"tiny-fim": "app:TestApp"}
     engine = LifecycleEngine(gw, reg, tel, rules)
@@ -46,6 +70,24 @@ async def test_tick_warms_autocomplete_when_app_running(config_path, backups_dir
         await engine.tick()
 
     assert warm_route.called
+    await gw.close()
+
+
+@respx.mock
+async def test_tick_skips_a_rule_target_missing_from_the_config(config_path, backups_dir):
+    respx.get(f"{BASE}/running").respond(200, json={"running": []})
+    warm_route = respx.get(f"{BASE}/upstream/ghost-fim/health").respond(200)
+
+    gw = Gateway(BASE)
+    engine = LifecycleEngine(
+        gw, Registry(config_path, backups_dir), Telemetry(gw), {"ghost-fim": "app:TestApp"}
+    )
+
+    with patch("hearthia.lifecycle.app_alive", return_value=True):
+        await engine.tick()
+
+    # Unpriceable model: the rule is reported, not warmed behind the gate's back.
+    assert not warm_route.called
     await gw.close()
 
 

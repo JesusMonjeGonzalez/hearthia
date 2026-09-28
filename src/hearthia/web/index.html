@@ -45,6 +45,7 @@
     <span class="vital"><label>cpu</label><b id="v-cpu">–</b></span>
     <span class="vital"><label>swap used</label><b id="v-swap">–</b></span>
     <span class="vital"><label>disk free</label><b id="v-disk">–</b></span>
+    <span class="vital"><label>residency policy</label><b id="v-policy" title="Live admission policy for loading models">–</b></span>
   </div>
 
   <div id="banner" class="banner" hidden></div>
@@ -70,6 +71,13 @@
       <aside class="conv-list">
         <button id="conv-new" class="btn" style="width:100%">New chat</button>
         <button id="conv-export" class="btn btn-quiet" style="width:100%" title="Export this conversation as Markdown">Export .md</button>
+        <button id="conv-import" class="btn btn-quiet" style="width:100%">Import browser chats</button>
+        <button id="conv-fork" class="btn btn-quiet" title="Copy this conversation to branch it">Fork</button>
+        <button id="conv-retry" class="btn btn-quiet" title="Re-run the last question in a fresh copy">Retry last turn</button>
+        <button id="conv-refresh" class="btn btn-quiet">Refresh</button>
+        <button id="conv-prev" class="btn btn-quiet">Previous</button>
+        <button id="conv-next" class="btn btn-quiet">Next</button>
+        <input id="conv-search" type="search" placeholder="Search all messages…" aria-label="Search conversations">
         <div id="conv-items"></div>
       </aside>
       <div class="chat-main">
@@ -87,6 +95,25 @@
           </details>
           <span id="chat-stats" class="chat-stats"></span>
         </div>
+        <div class="chat-toolbar chat-project-toolbar">
+          <input id="chat-workspace" type="text" placeholder="Project directory, e.g. /Users/me/project" aria-label="Project directory">
+          <select id="chat-mode" aria-label="Agent mode">
+            <option value="read">Consult</option>
+            <option value="build">Develop</option>
+          </select>
+          <button id="chat-older" class="btn btn-quiet" hidden>Older messages</button>
+          <button id="chat-latest" class="btn btn-quiet" hidden>Latest messages</button>
+        </div>
+        <div id="chat-mode-hint" class="hint">Consult: read and search files.</div>
+        <label class="hint" style="display:block;padding:0 12px">
+          <input type="checkbox" id="chat-autocontinue"> Auto-continue while the plan has pending steps (max 8)
+        </label>
+        <div id="chat-verify" class="hint chat-warn" role="status" hidden></div>
+        <div id="chat-jobs" class="hint" role="status" hidden></div>
+        <details id="chat-usage" class="hint" hidden><summary id="chat-usage-summary"></summary><ul id="chat-usage-lines"></ul></details>
+        <details id="chat-plan" class="hint" hidden><summary id="chat-plan-summary"></summary><ol id="chat-plan-steps"></ol></details>
+        <div id="chat-activity" class="hint" role="status" aria-live="polite"></div>
+        <div id="chat-context" class="hint" role="status" aria-live="polite"></div>
         <div id="chat-log" class="chat-log">
           <div class="empty">The hearth is quiet. Your first message warms the model into RAM.</div>
         </div>
@@ -152,9 +179,13 @@
   <section id="tab-logs" class="panel">
     <div class="logs-toolbar">
       <span class="hint">Live stream from llama-swap and every model server it runs.</span>
+      <input id="logs-search" type="search" placeholder="Filter log lines…" aria-label="Filter log lines">
+      <button id="logs-pause" class="btn btn-quiet" aria-pressed="false">Pause view</button>
+      <button id="logs-export" class="btn btn-quiet">Export view</button>
       <button id="logs-clear" class="btn btn-quiet">Clear view</button>
     </div>
-    <pre id="log-view"></pre>
+    <p id="logs-status" class="hint" role="status">Connecting…</p>
+    <pre id="log-view" tabindex="0" aria-label="Gateway logs"></pre>
   </section>
 
   <section id="tab-treepact" class="panel">

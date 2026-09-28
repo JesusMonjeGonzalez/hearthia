@@ -45,8 +45,16 @@ models:
 
 @pytest.fixture(autouse=True)
 def _isolated_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Keep Settings() from reading the developer's real ~/.config/hearthia/config.toml."""
-    monkeypatch.setenv("HEARTHIA_CONFIG", str(tmp_path / "hearthia-config.toml"))
+    """Keep Settings() away from the developer's real config and directories.
+
+    The config file is written, not merely pointed at, so a default stack_dir
+    can never resolve to ~/.hearthia and silently collect test data.
+    """
+    config = tmp_path / "hearthia-config.toml"
+    sandbox = tmp_path / "hearthia-home"
+    (sandbox / "models").mkdir(parents=True, exist_ok=True)
+    config.write_text(f'[paths]\nstack_dir = "{sandbox}"\nmodels_dir = "{sandbox}/models"\n')
+    monkeypatch.setenv("HEARTHIA_CONFIG", str(config))
     for var in [v for v in os.environ if v.startswith("HEARTHIA_") and v != "HEARTHIA_CONFIG"]:
         monkeypatch.delenv(var)
 

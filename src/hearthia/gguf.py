@@ -40,7 +40,14 @@ _MAX_ARRAY_ELEMENTS = 4096
 
 @dataclass(frozen=True)
 class RamProfile:
-    """The GGUF-header facts a KV-cache estimate needs."""
+    """The GGUF-header facts a KV-cache estimate needs.
+
+    Hybrid architectures (Qwen3.5/3.8 and relatives) keep a KV cache on only
+    every ``full_attention_interval``-th trunk layer and a fixed recurrent
+    state on the rest, so ``n_layer`` alone overstates the cache several-fold.
+    The defaults describe a plain attention model: every layer caches, and
+    nothing is recurrent.
+    """
 
     n_layer: int
     n_kv_heads: int
@@ -48,6 +55,12 @@ class RamProfile:
     v_len: int
     context_length: int
     file_size: int
+    full_attention_interval: int = 1
+    nextn_layers: int = 0
+    ssm_d_conv: int = 0
+    ssm_d_inner: int = 0
+    ssm_d_state: int = 0
+    ssm_n_group: int = 0
 
 
 class _Reader:
@@ -196,6 +209,14 @@ def model_ram_profile(path: Path) -> RamProfile | None:
     except OSError:
         return None
 
+    def _positive(key: str) -> int:
+        value = _as_int(kv.get(f"{arch}.{key}"))
+        return value if value is not None and value > 0 else 0
+
+    # An interval of 0 or 1 means "no hybrid layout"; treat both as plain attention.
+    interval = _positive("full_attention_interval")
+    nextn = _positive("nextn_predict_layers")
+
     return RamProfile(
         n_layer=n_layer,
         n_kv_heads=kv_heads,
@@ -203,4 +224,10 @@ def model_ram_profile(path: Path) -> RamProfile | None:
         v_len=v_len,
         context_length=ctx,
         file_size=file_size,
+        full_attention_interval=interval if interval > 1 else 1,
+        nextn_layers=nextn if nextn < n_layer else 0,
+        ssm_d_conv=_positive("ssm.conv_kernel"),
+        ssm_d_inner=_positive("ssm.inner_size"),
+        ssm_d_state=_positive("ssm.state_size"),
+        ssm_n_group=_positive("ssm.group_count"),
     )

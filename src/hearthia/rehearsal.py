@@ -11,7 +11,7 @@ background scheduler nobody asked for. No local-model runtime offers this.
 
 import logging
 
-from hearthia.budget import plan_warm_now
+from hearthia.budget import plan_warm_now, policy_from_memory
 from hearthia.gateway import Gateway
 from hearthia.registry import Model
 from hearthia.settings import Settings
@@ -39,13 +39,17 @@ async def rehearse(
     all_models = targets if all_models is None else all_models
     results: list[dict] = []
     for model in targets:
-        running = await gw.running()
-        running_ids = {m.get("model", "") for m in running}
+        running = await gw.inventory()
+        running_ids = {m.get("model", "") for m in running or []}
         was_warm = model.id in running_ids
 
         if not was_warm:
             decision = plan_warm_now(
-                all_models, model.id, running, mode=s.memory.mode if s.memory else "enforce"
+                all_models,
+                model.id,
+                running,
+                mode=s.memory.mode if s.memory else "enforce",
+                policy=policy_from_memory(s.memory),
             )
             if not decision.allowed:
                 results.append(
