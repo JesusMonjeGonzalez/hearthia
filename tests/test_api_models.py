@@ -70,7 +70,10 @@ async def test_status_reports_sleep_prevented(config_path, backups_dir):
     await app.state.gateway.close()
 
 
+@respx.mock
 async def test_status_gateway_down(config_path, backups_dir):
+    # Without the decorator, respx never intercepts: this can only pass by
+    # accident when the real gateway port is closed on the developer's Mac.
     respx.get(f"{BASE}/health").mock(side_effect=httpx.ConnectError("down"))
     respx.get(f"{BASE}/running").mock(side_effect=httpx.ConnectError("down"))
     app = _app(config_path, backups_dir)
@@ -629,4 +632,23 @@ async def test_calibration_endpoint_reports_learned_corrections(config_path, bac
     data = r.json()["models"]
     assert data["big-coder"]["samples"] == 2
     assert data["big-coder"]["ratio"] == 1.2
+    await app.state.gateway.close()
+
+
+@respx.mock
+async def test_status_counts_jobs_and_hooks(config_path, backups_dir, tmp_path):
+    from hearthia.hooks import HookRunner
+    from hearthia.jobs import JobRegistry
+    from hearthia.settings import HookSettings
+
+    respx.get(f"{BASE}/health").respond(200)
+    respx.get(f"{BASE}/running").respond(200, json={"running": []})
+    app = _app(config_path, backups_dir)
+    app.state.jobs = JobRegistry(tmp_path / "jobs")
+    app.state.hooks = HookRunner([HookSettings(events=["turn_end"], command=["/usr/bin/true"])])
+    async with await _client(app) as client:
+        data = (await client.get("/api/status")).json()
+    assert data["jobs_running"] == 0
+    assert data["hooks_configured"] == 1
+    assert data["version"]
     await app.state.gateway.close()

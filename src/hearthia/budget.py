@@ -62,6 +62,41 @@ class WarmDecision:
     available: int = 0
     wired_limit: int = 0
     lines: list[str] = field(default_factory=list)
+    already_resident: bool = False
+    headroom_bytes: int = 0  # RAM left for macOS/apps after the load
+
+
+@dataclass(frozen=True)
+class MemoryPolicy:
+    """Explicit residency policy on top of the per-load fit math.
+
+    ``max_large_models`` — how many models above ``helper_max_bytes`` may be
+    resident at once; 1 enforces one large model at a time.
+    ``helper_max_bytes`` — resident size under which a model counts as a small
+    helper (embeddings, autocomplete). Set to 0 for a strict single model.
+    ``os_reserve_bytes`` — non-wired RAM kept free for macOS and every other
+    app after the load; wired memory cannot be paged out, so this is the
+    reserve that prevents a stutter-then-swap freeze.
+    ``swap_warn_bytes`` — swap already in use is surfaced as a warning.
+    """
+
+    max_large_models: int = 1
+    helper_max_bytes: int = 3 * 1024**3
+    os_reserve_bytes: int = 6 * 1024**3
+    swap_warn_bytes: int = 512 * 1024**2
+
+
+def policy_from_memory(memory: object | None) -> MemoryPolicy:
+    """Build a MemoryPolicy from Settings.memory without importing settings."""
+    if memory is None:
+        return MemoryPolicy()
+    mib = 1024**2
+    return MemoryPolicy(
+        max_large_models=int(getattr(memory, "max_large_models", 1)),
+        helper_max_bytes=int(getattr(memory, "helper_max_mib", 3072)) * mib,
+        os_reserve_bytes=int(getattr(memory, "os_reserve_mib", 6144)) * mib,
+        swap_warn_bytes=int(getattr(memory, "swap_warn_mib", 512)) * mib,
+    )
 
 
 def _cache_types(cmd: str) -> tuple[str, str]:
@@ -99,6 +134,20 @@ def _sidecar_bytes(cmd: str) -> tuple[int, str]:
         else:
             detail += " + prompt cache unbounded"
     return total, detail
+
+
+def kv_bytes(model: Model, profile: RamProfile | None) -> int:
+    """Attention + recurrent KV size for the model's configured context.
+
+    Used by the tuning advisor to compare the configured prompt cache
+    (``--cache-ram``) against what a full slot state actually occupies.
+    """
+    if profile is None:
+        return 0
+    ctx = model.ctx or profile.context_length
+    k_type, v_type = _cache_types(model.cmd)
+    kv, recurrent = context_bytes(profile, ctx, k_type, v_type)
+    return kv + recurrent
 
 
 def estimate_model_ram(
@@ -166,6 +215,8 @@ def plan_warm(
     mode: str = "enforce",
     calibration: CalibrationStore | None = None,
     power: PowerState | None = None,
+    policy: MemoryPolicy | None = None,
+    swap_used: int = 0,
 ) -> WarmDecision:
     """Compute the warm decision.
 
@@ -173,35 +224,75 @@ def plan_warm(
     (None when unmeasured — estimated from the file size instead). When
     ``power`` reflects a constrained battery or thermal state, the wired
     ceiling flexes down for this decision only (see ``power.py``).
+
+    ``policy`` adds the residence rules on top of the raw fit math: one
+    large model at a time, small helpers capped by resident size, and a
+    non-wired reserve kept free for macOS and every other app. ``swap_used``
+    turns already-active swap into a visible warning. A candidate that is
+    already resident is never costed twice and is always allowed.
     """
+    policy = policy or MemoryPolicy()
     by_id = {m.id: m for m in models}
     candidate = by_id.get(candidate_id)
     if candidate is None:
-        return WarmDecision(
-            candidate_id, True, lines=["model not in registry — skipping budget check"]
+        # llama-swap accepts aliases, so an un-resolved alias used to walk
+        # straight past this gate. Resolve it before giving up on the check.
+        matches = [m for m in models if candidate_id in m.aliases]
+        candidate = matches[0] if len(matches) == 1 else None
+    if candidate is None:
+        reason = (
+            f"{candidate_id} is not a known model or unique alias, so its memory "
+            "cost cannot be estimated. Load it by its configured id, or set "
+            "memory.mode to warn to proceed without the check."
         )
+        if mode == "enforce":
+            log.warning("warm blocked: %s", reason)
+            return WarmDecision(candidate_id, False, blocked_reason=reason, lines=[f"  {reason}"])
+        return WarmDecision(candidate_id, True, warning=reason, lines=[f"  {reason}"])
 
     wired = wired_limit_bytes(ram_total)
     power_lines: list[str] = []
     if power is not None:
         wired, power_lines = apply_to_ceiling(wired, power)
 
+    est = estimate_model_ram(candidate, profile_for(candidate), calibration=calibration)
+    already_resident = candidate.id in running
+
     resident = 0
+    large_resident: list[str] = []
     resident_lines: list[str] = []
     for mid, rss in running.items():
         m = by_id.get(mid)
+        rest = estimate_model_ram(m, profile_for(m), calibration=calibration) if m else None
         if rss:
-            resident += rss
-            resident_lines.append(f"  running  {mid:24} {rss / 2**30:6.1f} GiB  measured")
-        elif m is not None:
-            est = estimate_model_ram(m, profile_for(m), calibration=calibration)
-            resident += est.resident_bytes
-            tag = "" if est.known else "  (guess)"
-            resident_lines.append(f"  running  {mid:24} {est.resident_bytes / 2**30:6.1f} GiB{tag}")
+            held, tag = rss, "  measured"
+        elif rest is not None:
+            held, tag = rest.resident_bytes, ("" if rest.known else "  (guess)")
+        else:
+            # Resident but unknown in the registry: count it and treat it as
+            # large. An unpriceable resident must never unlock an extra slot.
+            held, tag = 0, "  unknown"
+        resident += held
+        if mid != candidate.id and (rest is None or rest.resident_bytes > policy.helper_max_bytes):
+            large_resident.append(mid)
+        resident_lines.append(f"  running  {mid:24} {held / 2**30:6.1f} GiB{tag}")
 
-    est = estimate_model_ram(candidate, profile_for(candidate), calibration=calibration)
-    total = resident + est.resident_bytes
-    fits = total < wired and total < ram_available
+    # A resident candidate already holds its RAM: never charge the estimate twice.
+    total = resident if already_resident else resident + est.resident_bytes
+    headroom = ram_total - total
+    candidate_is_helper = est.resident_bytes <= policy.helper_max_bytes
+
+    policy_lines = [
+        f"  policy    max {policy.max_large_models} large model(s) · helpers "
+        f"≤ {policy.helper_max_bytes / 2**30:.1f} GiB · OS reserve "
+        f"{policy.os_reserve_bytes / 2**30:.1f} GiB",
+        f"  headroom  {headroom / 2**30:6.1f} GiB for macOS/apps after load"
+        + ("  (already resident)" if already_resident else ""),
+        f"  swap      {swap_used / 2**30:6.1f} GiB in use"
+        + ("  — system already swapping" if swap_used > policy.swap_warn_bytes else ""),
+    ]
+    if large_resident:
+        policy_lines.insert(1, "  resident  large: " + ", ".join(sorted(large_resident)))
 
     lines = [
         f"  estimate  {est.detail}",
@@ -209,38 +300,58 @@ def plan_warm(
         + ("" if est.known else "  (guess)"),
         *resident_lines,
         *power_lines,
+        *policy_lines,
         f"  total     {total / 2**30:6.1f} GiB of "
         f"{wired / 2**30:.1f} GiB wired ceiling, {ram_available / 2**30:.1f} GiB available",
     ]
 
-    if fits:
-        warning = (
-            ""
-            if est.known
-            else (
-                f"{candidate_id}: resident estimate is a file-size guess — "
-                "verify memory pressure after warm"
-            )
+    warnings: list[str] = []
+    if not est.known and not already_resident:
+        warnings.append(
+            f"{candidate_id}: resident estimate is a file-size guess — "
+            "verify memory pressure after warm"
         )
-        return WarmDecision(
-            candidate_id,
-            True,
-            warning=warning,
-            estimate=est,
-            resident_bytes=resident,
-            available=ram_available,
-            wired_limit=wired,
-            lines=lines,
+    if swap_used > policy.swap_warn_bytes:
+        warnings.append(
+            f"swap already holds {swap_used / 2**30:.1f} GiB — the Mac is under "
+            "real memory pressure; expect the whole system to stutter"
         )
 
-    # Both ceilings have to pass, so the lower one is what actually binds.
-    reason = (
+    # The binding limit is whichever ceiling is lower — both have to pass.
+    ceiling_reason = (
         f"{candidate_id} does not fit the unified-memory budget: "
         f"{total / 2**30:.1f} GiB needed, {min(wired, ram_available) / 2**30:.1f} GiB ceiling "
         f"({wired / 2**30:.1f} GiB wired, {ram_available / 2**30:.1f} GiB available). "
         "Cool another model (hearth cool), lower --ctx-size, or use --force."
     )
-    if mode == "enforce":
+    # Wired memory cannot be paged out: the reserve is what keeps macOS and
+    # every other app away from compression and swap after the load lands.
+    reserve_reason = (
+        f"{candidate_id} does not fit the unified-memory budget with the "
+        f"{policy.os_reserve_bytes / 2**30:.1f} GiB reserve for macOS/apps: "
+        f"{total / 2**30:.1f} GiB needed leaves only {headroom / 2**30:.1f} GiB free. "
+        "Cool another model (hearth cool), lower --ctx-size, or reduce "
+        "[memory].os_reserve_mib."
+    )
+    reason = ""
+    if not already_resident:
+        if not (total < wired and total < ram_available):
+            reason = ceiling_reason
+        elif headroom < policy.os_reserve_bytes:
+            reason = reserve_reason
+        elif not candidate_is_helper and len(large_resident) >= policy.max_large_models:
+            others = ", ".join(sorted(large_resident))
+            reason = (
+                f"{candidate_id} needs the resident slot, but {others} is already "
+                f"loaded and [memory].max_large_models is {policy.max_large_models}. "
+                "Hearthia keeps one large model at a time: cool the other first "
+                f"(hearth cool {sorted(large_resident)[0]}), or raise the limit deliberately."
+            )
+
+    if already_resident:
+        warnings.append(f"{candidate_id} is already warm — no new allocation for this request")
+
+    if mode == "enforce" and reason:
         log.warning("warm blocked: %s", reason)
         return WarmDecision(
             candidate_id,
@@ -251,16 +362,22 @@ def plan_warm(
             available=ram_available,
             wired_limit=wired,
             lines=lines,
+            already_resident=already_resident,
+            headroom_bytes=headroom,
         )
+    if reason:
+        warnings.append(reason)
     return WarmDecision(
         candidate_id,
         True,
-        warning=reason,
+        warning=" · ".join(warnings),
         estimate=est,
         resident_bytes=resident,
         available=ram_available,
         wired_limit=wired,
         lines=lines,
+        already_resident=already_resident,
+        headroom_bytes=headroom,
     )
 
 
@@ -322,6 +439,7 @@ def plan_warm_now(
     mode: str,
     calibration: CalibrationStore | None = None,
     power: PowerState | None = None,
+    policy: MemoryPolicy | None = None,
 ) -> WarmDecision:
     """Decide a warm against live memory. ``running_models`` may be ``None``
     when the gateway inventory could not be read (see ``Gateway.inventory``);
@@ -337,6 +455,7 @@ def plan_warm_now(
             return WarmDecision(candidate_id, False, blocked_reason=reason, lines=[f"  {reason}"])
         return WarmDecision(candidate_id, True, warning=reason, lines=[f"  {reason}"])
     vm = psutil.virtual_memory()
+    swap = psutil.swap_memory()
     return plan_warm(
         models,
         candidate_id,
@@ -346,6 +465,8 @@ def plan_warm_now(
         mode=mode,
         calibration=calibration,
         power=power,
+        policy=policy,
+        swap_used=swap.used,
     )
 
 
@@ -463,6 +584,7 @@ def advise_fit(
     ram_total: int,
     ram_available: int,
     calibration: CalibrationStore | None = None,
+    policy: MemoryPolicy | None = None,
 ) -> dict:
     """Enumerate the change-sets that make ``wanted_ids`` fit the budget.
 
@@ -576,12 +698,46 @@ def advise_fit(
                     )
                 )
 
+    # The advice must not contradict the residency policy: a change-set that
+    # fits the RAM budget can still be refused by the one-large-model rule.
+    policy = policy or MemoryPolicy()
+    large_wanted = [
+        mid
+        for mid in wanted
+        if (candidate_est := base.get(mid)) is not None
+        and candidate_est.resident_bytes > policy.helper_max_bytes
+    ]
+    large_resident = [
+        mid
+        for mid, _rss in running.items()
+        if mid not in wanted
+        and (
+            (m := by_id.get(mid)) is None
+            or estimate_model_ram(m, profile_for(m), calibration=calibration).resident_bytes
+            > policy.helper_max_bytes
+        )
+    ]
+    policy_note = {
+        "max_large_models": policy.max_large_models,
+        "large_resident": large_resident,
+        "large_wanted": large_wanted,
+        "violation": len(large_resident) + len(large_wanted) > policy.max_large_models,
+    }
+    if policy_note["violation"]:
+        policy_note["note"] = (
+            f"the RAM budget may allow this set, but [memory].max_large_models="
+            f"{policy.max_large_models} does: "
+            + ", ".join([*large_resident, *large_wanted])
+            + " would be refused at warm time — cool the resident model or raise the limit"
+        )
+
     return {
         "fits": fits_now,
         "total_bytes": as_configured,
         "wired_limit": wired,
         "ram_available": ram_available,
         "options": options,
+        "policy": policy_note,
     }
 
 

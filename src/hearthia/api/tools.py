@@ -6,6 +6,7 @@ costs a full LLM inference (~1-2 min at local speeds).
 """
 
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -40,8 +41,70 @@ JUNK_DIRS = {
 _FILE_CHAR_BUDGET = 12_000  # per file
 _BATCH_CHAR_BUDGET = 48_000  # per read_files call
 _PREVIEW_LINES = 30
+_MAX_READ_FILES = 24
 
-TOOLS = [
+
+def _read_prefix(path: Path, budget: int) -> str:
+    """Bound the read itself, not just the returned string."""
+    with path.open(encoding="utf-8", errors="replace") as stream:
+        text = stream.read(budget + 1)
+    if len(text) > budget:
+        return text[:budget] + "\n… [truncated: file exceeds character budget]"
+    return text
+
+
+def probe_reads(paths: list[str]) -> list[dict]:
+    """Path + sha256 + size for full-file reads, without building content.
+
+    Used by the chat to notice that a file being re-read is byte-identical to
+    a copy already in the prompt, so thousands of tokens are not resent.
+    Order is preserved: entry i always corresponds to ``paths[i]``.
+    """
+    results: list[dict] = []
+    for value in paths[:24]:
+        if not isinstance(value, str) or not value:
+            results.append({"path": "", "sha": "", "reason": "invalid path"})
+            continue
+        try:
+            path = _resolve(value)
+            info = path.stat()
+            if not path.is_file() or info.st_size > 512_000:
+                results.append({"path": str(path), "sha": "", "reason": "not a small regular file"})
+                continue
+            sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError as exc:
+            results.append({"path": value, "sha": "", "reason": str(exc)[:120]})
+            continue
+        results.append({"path": str(path), "sha": sha, "size": info.st_size})
+    return results
+
+
+def _edit_hash(path: Path) -> str:
+    """Only hash files small enough for the editing tool, with a bounded read."""
+    with path.open("rb") as source:
+        data = source.read(512_001)
+    if len(data) > 512_000:
+        return ""
+    return "sha256: " + hashlib.sha256(data).hexdigest() + "\n"
+
+
+TOOLS: list[dict] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read a specific line range with line numbers; use after search.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "offset": {"type": "integer", "minimum": 1},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+                },
+                "required": ["path"],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
@@ -187,11 +250,11 @@ def _closest_matches(missing: Path, n: int = 3) -> list[Path]:
 def _read_one(path: Path, budget: int) -> str:
     if path.exists() and path.is_file():
         try:
-            content = _truncate(path.read_text(encoding="utf-8", errors="replace"), budget)
+            content = _read_prefix(path, budget)
         except OSError as e:
             return f"Error reading {path}: {e}"
         lang = path.suffix.lstrip(".")
-        return f"### {path}\n```{lang}\n{content}\n```"
+        return f"### {path}\n{_edit_hash(path)}```{lang}\n{content}\n```"
     if path.is_dir():
         return f"Error: {path} is a directory — use list_dir"
     # Hallucinated path: recover instead of burning a round on "not found".
@@ -215,9 +278,7 @@ def _preview_special_files(path: Path) -> str:
             continue
         if f.name.lower().startswith("readme") or f.name in manifests:
             try:
-                head = "\n".join(
-                    f.read_text(encoding="utf-8", errors="replace").splitlines()[:_PREVIEW_LINES]
-                )
+                head = "\n".join(_read_prefix(f, 2000).splitlines()[:_PREVIEW_LINES])
             except OSError:
                 continue
             out.append(f"--- {f.name} (first {_PREVIEW_LINES} lines) ---\n{head}")
@@ -260,11 +321,43 @@ def _tree(path: Path, depth: int = 2, per_dir: int = 40, indent: str = "") -> li
 
 
 async def execute_tool(tool_call: dict, *, notes_search=None) -> str:
+    try:
+        return await _execute_tool(tool_call, notes_search=notes_search)
+    except (KeyError, TypeError, ValueError, OSError) as e:
+        return f"Error: invalid tool arguments or inaccessible path — {e}"
+
+
+async def _execute_tool(tool_call: dict, *, notes_search=None) -> str:
     name = tool_call["function"]["name"]
     try:
         args = json.loads(tool_call["function"]["arguments"])
     except json.JSONDecodeError as e:
         return f"Error: invalid arguments JSON — {e}"
+    if not isinstance(args, dict):
+        return "Error: tool arguments must be a JSON object"
+
+    if name == "read_file":
+        offset, limit = int(args.get("offset", 1)), int(args.get("limit", 200))
+        if not 1 <= offset <= 100_000 or not 1 <= limit <= 500:
+            return "Error: offset must be 1..100000 and limit 1..500"
+        path = _resolve(args["path"])
+        lines, scanned, used = [], 0, 0
+        with path.open(encoding="utf-8", errors="replace") as stream:
+            for number in range(1, offset + limit):
+                line = stream.readline(_FILE_CHAR_BUDGET + 1)
+                if not line:
+                    break
+                scanned += len(line)
+                if scanned > 2_000_000 or len(line) > _FILE_CHAR_BUDGET:
+                    lines.append("… [scan limit reached; use search for a narrower result]")
+                    break
+                if number >= offset:
+                    used += len(line)
+                    if used > _FILE_CHAR_BUDGET:
+                        lines.append("… [output truncated]")
+                        break
+                    lines.append(f"{number}: {line.rstrip()}")
+        return f"### {path}\n{_edit_hash(path)}" + "\n".join(lines)
 
     if name in ("read_files", "read_file"):
         paths = args.get("paths") or ([args["path"]] if args.get("path") else [])
@@ -272,6 +365,10 @@ async def execute_tool(tool_call: dict, *, notes_search=None) -> str:
             paths = [paths]
         if not paths:
             return "Error: no paths given"
+        if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
+            return "Error: paths must be a list of strings"
+        if len(paths) > _MAX_READ_FILES:
+            return f"Error: read_files accepts at most {_MAX_READ_FILES} paths per call"
         budget = max(2000, min(_FILE_CHAR_BUDGET, _BATCH_CHAR_BUDGET // len(paths)))
         return "\n\n".join(_read_one(_resolve(p), budget) for p in paths)
 
@@ -300,14 +397,14 @@ async def execute_tool(tool_call: dict, *, notes_search=None) -> str:
         return out
 
     if name == "glob":
-        root = _resolve(args.get("root", "~"))
+        root = _resolve(args.get("root", "."))
         pattern = args["pattern"]
         if not root.exists():
             return f"Error: root not found: {root}"
         try:
             hits = []
-            for f in root.rglob(pattern):
-                if f.is_file() and not _is_junk(f.relative_to(root)):
+            for f in _walk(root, max_depth=12, max_files=5000):
+                if f.match(pattern) and f.is_file():
                     hits.append(str(f.relative_to(root)))
                     if len(hits) >= 500:
                         break

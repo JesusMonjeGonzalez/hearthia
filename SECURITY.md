@@ -13,7 +13,24 @@ indexes, logs or credentials.
 
 - The daemon is loopback-only and rejects non-loopback bind addresses.
 - It has no authentication and must not be exposed as a remote or multi-user service.
+- Warm admission applies the residency policy (one large model, helper cap,
+  OS/apps reserve, swap warning) and fails closed when the resident set cannot
+  be read. `memory.mode = warn|off` and `--force` deliberately disable parts
+  of that protection. Direct clients of the llama-swap port bypass the gate
+  entirely; run one loading surface.
 - Context tools can read files available to the local process; use a dedicated local user if needed.
+- MCP servers declared under `[mcp.servers.*]` are spawned with the local user's
+  permissions (no shell), are opt-in, and are killed with the daemon. The
+  `read_only` flag restricts which chat modes may call their tools; it does not
+  sandbox the server process itself.
+- Chat defaults to Consult mode. Explicit Develop mode adds file edits within a
+  selected workspace and foreground commands with the local user's permissions.
+  Commands inherit the daemon environment and are not sandboxed; workspace cwd
+  does not confine their filesystem or network access. Resource sampling and
+  process-group cleanup are operational limits, not an isolation boundary.
+- Persistent chat transcripts include file/tool content and partial model output
+  in local plaintext SQLite storage. Interrupted tool calls are not replayed
+  automatically, and cancellation does not roll back completed file changes.
 - Model downloads require a file published by Hugging Face with a verifiable SHA-256.
 - Configuration replacement is atomic and keeps a local backup.
 - The MCP server (`hearth mcp`) has no network listener: it speaks stdio with

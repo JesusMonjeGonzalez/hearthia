@@ -17,6 +17,8 @@ BASE = "http://127.0.0.1:9292"
 
 
 def _app(config_path, backups_dir):
+    # Chat admission now checks the gateway inventory before inference.
+    respx.get(f"{BASE}/running").respond(200, json={"running": []})
     app = FastAPI()
     app.state.gateway = Gateway(BASE)
     app.state.registry = Registry(config_path, backups_dir)
@@ -171,11 +173,11 @@ async def test_chat_injects_repo_map_for_mentioned_dir(config_path, backups_dir,
     app = _app(config_path, backups_dir)
     await _post_chat(app, f"explora {tmp_path} y dime qué hace")
     msgs = calls[0]["messages"]
-    # Qwen templates reject system messages after the first position.
+    # Volatile project context rides in the newest user turn, never the system
+    # message: that keeps the cached prompt prefix reusable across rounds.
     assert [m["role"] for m in msgs if m["role"] == "system"] == ["system"]
-    assert msgs[0]["role"] == "system"
-    assert "Project map" in msgs[0]["content"]
-    assert "Injected-preview-marker" in msgs[0]["content"]
+    assert "Injected-preview-marker" in msgs[-1]["content"]
+    assert "Injected-preview-marker" not in msgs[0]["content"]
     await app.state.gateway.close()
 
 
@@ -198,7 +200,6 @@ async def test_chat_requests_prompt_cache(config_path, backups_dir):
 async def test_chat_forces_final_answer_when_rounds_exhausted(
     config_path, backups_dir, tmp_path, monkeypatch
 ):
-    monkeypatch.setattr("hearthia.api.chat._MAX_TOOL_ROUNDS", 1)
     target = tmp_path / "f.py"
     target.write_text("x = 1\n")
     calls = []
@@ -211,6 +212,7 @@ async def test_chat_forces_final_answer_when_rounds_exhausted(
 
     respx.post(f"{BASE}/v1/chat/completions").mock(side_effect=_handler)
     app = _app(config_path, backups_dir)
+    app.state.settings.agent.max_tool_rounds = 1
     body = await _post_chat(app, "loop forever")
     assert b"the answer" in body  # user still gets an answer
     assert len(calls) == 2
@@ -288,15 +290,15 @@ def _tool_round(i: int, content: str) -> list[dict]:
 
 
 def test_trim_history_shrinks_oldest_tool_results_only():
-    from hearthia.api.chat import _CTX_BUDGET_CHARS, _trim_history
+    from hearthia.api.chat import _PRE_TRIM_BYTES, _trim_history
 
-    big = "x" * 20_000
+    big = "x" * 80_000
     msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}]
     for i in range(4):
         msgs += _tool_round(i, big)
     out = _trim_history(msgs)
-    total = sum(len(str(m.get("content") or "")) for m in out)
-    assert total <= _CTX_BUDGET_CHARS
+    total = sum(len(str(m.get("content") or "").encode()) for m in out)
+    assert total <= _PRE_TRIM_BYTES
     assert out[-1]["content"] == big  # newest round intact
     assert out[-3]["content"] == big  # second-newest intact
     assert "trimmed" in out[3]["content"]  # oldest tool result trimmed
@@ -311,12 +313,12 @@ def test_trim_history_noop_under_budget():
 
 
 def test_trim_history_falls_back_to_protecting_only_newest_round():
-    from hearthia.api.chat import _CTX_BUDGET_CHARS, _trim_history
+    from hearthia.api.chat import _PRE_TRIM_BYTES, _trim_history
 
-    big = "x" * 35_000
+    big = "x" * 160_000
     msgs = [{"role": "user", "content": "u"}, *_tool_round(0, big), *_tool_round(1, big)]
     out = _trim_history(msgs)
-    total = sum(len(str(m.get("content") or "")) for m in out)
-    assert total <= _CTX_BUDGET_CHARS
+    total = sum(len(str(m.get("content") or "").encode()) for m in out)
+    assert total <= _PRE_TRIM_BYTES
     assert out[-1]["content"] == big  # newest round never trimmed
     assert "trimmed" in out[2]["content"]  # older round sacrificed

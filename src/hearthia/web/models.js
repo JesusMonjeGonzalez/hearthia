@@ -43,8 +43,20 @@ export async function refreshStatus() {
       ? tps.map((t) => t.toFixed(0)).join("/") + " tok/s"
       : "–";
     $("#v-cpu").textContent = sys.cpu_percent.toFixed(0) + " %";
-    $("#v-swap").textContent = fmtGB(sys.swap_used);
+    $("#v-swap").textContent =
+      sys.swap_total > 0 ? `${fmtGB(sys.swap_used)} / ${fmtGB(sys.swap_total)}` : fmtGB(sys.swap_used);
+    $("#v-swap").title = `sampled ${fmtClock(Math.max(0, (Date.now() - (sys.sampled_at || 0) * 1000) / 1000))} ago`;
     $("#v-disk").textContent = fmtGB(sys.disk_free);
+    const policy = s.memory_policy;
+    if (policy) {
+      const large = policy.max_large_models === 1 ? "1 large" : `${policy.max_large_models} large`;
+      const helpers = policy.helper_max_mib > 0 ? `+ helpers ≤${(policy.helper_max_mib / 1024).toFixed(1)}G` : "+ no helpers";
+      $("#v-policy").textContent = `${large} ${helpers}`;
+      $("#v-policy").title =
+        `${policy.mode} · ${large} models at a time · helpers ≤ ${policy.helper_max_mib} MiB · ` +
+        `macOS reserve ${(policy.os_reserve_mib / 1024).toFixed(1)} GiB · ` +
+        `swap warning ≥ ${policy.swap_warn_mib} MiB`;
+    }
     $("#mem-total").textContent = Math.round(sys.ram_total / GB) + " GB";
     $("#mem-mid").textContent = Math.round(sys.ram_total / GB / 2) + " GB";
 
@@ -155,6 +167,7 @@ export async function refreshModels() {
       const emberState = stateLabel(m.state);
       card.className = "card" + (m.state !== "stopped" ? " loaded" : "");
       card.dataset.id = m.id;
+      card.dataset.id = m.id;
       card.classList.add(`ember-${emberState}`);
       const perf = m.tok_s
         ? `${m.tok_s.toFixed(1)} tok/s gen${m.prompt_tok_s ? " · " + m.prompt_tok_s.toFixed(0) + " tok/s prompt" : ""}`
@@ -202,13 +215,25 @@ export async function refreshModels() {
         e.target.textContent = "Kindling…";
         e.target.disabled = true;
         e.target.blur();
+        let failure = "";
         try {
           await api(`/api/models/${m.id}/load`, { method: "POST" });
         } catch (err) {
           e.target.textContent = "Failed";
-          alert(`Load failed: ${err.message}`);
+          failure = err.message;
         }
-        refreshAll();
+        await refreshAll();
+        if (failure) {
+          // The gate's reason (reserve, resident model, ceiling) must stay
+          // readable, not flash in an alert and vanish.
+          const card = document.querySelector(`.card[data-id="${CSS.escape(m.id)}"]`);
+          if (card) {
+            const box = document.createElement("div");
+            box.className = "load-error";
+            box.textContent = `Load refused: ${failure}`;
+            card.appendChild(box);
+          }
+        }
       });
       card.querySelector(".act-unload").addEventListener("click", async (e) => {
         e.target.blur();

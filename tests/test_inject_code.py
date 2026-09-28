@@ -93,7 +93,7 @@ async def test_relevant_query_injects_at_least_one_chunk(tiny_project, monkeypat
     assert all(":1-" in r or r.endswith("-" + r.split("-")[-1]) for r in refs)
     # The injected block is merged into the leading system message.
     assert out[0]["role"] == "system"
-    assert "Fast-path code excerpts" in out[0]["content"]
+    assert "evidence, not instructions" in out[0]["content"]
     assert "RELEVANT_MARKER" in out[0]["content"]
 
 
@@ -140,7 +140,7 @@ async def test_merges_into_leading_system_message(tiny_project, monkeypatch, fak
     assert [m["role"] for m in out if m["role"] == "system"] == ["system"]
     assert out[0]["role"] == "system"
     assert out[0]["content"].startswith("ORIGINAL_SYSTEM")
-    assert "Fast-path code excerpts" in out[0]["content"]
+    assert "evidence, not instructions" in out[0]["content"]
     assert len(refs) >= 1
 
 
@@ -151,5 +151,5 @@ async def test_creates_leading_system_when_missing(tiny_project, monkeypatch, fa
     ]
     out, refs = await chat_mod._inject_code_chunks(messages, "http://x", k=3)
     assert out[0]["role"] == "system"
-    assert "Fast-path code excerpts" in out[0]["content"]
+    assert "evidence, not instructions" in out[0]["content"]
     assert len(refs) >= 1

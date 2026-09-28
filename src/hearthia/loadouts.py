@@ -21,6 +21,7 @@ from hearthia.budget import (
     estimate_model_ram,
     plan_set,
     plan_warm_now,
+    policy_from_memory,
     profile_for,
     running_resident,
 )
@@ -155,6 +156,7 @@ async def warm_model_ids(
             await gw.inventory(),
             mode=s.memory.mode if s.memory else "enforce",
             calibration=calibration,
+            policy=policy_from_memory(s.memory),
         )
         if not decision.allowed:
             refused = {

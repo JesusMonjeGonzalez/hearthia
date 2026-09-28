@@ -56,7 +56,12 @@ def _int_metric(vals: dict[str, str], key: str) -> int | None:
 
 
 def llama_server_procs() -> list[dict]:
-    """Running llama-server processes with RSS and the gguf they serve."""
+    """Running llama-server processes with RSS, the gguf they serve and their ctx.
+
+    Two profiles can share one weights file and differ only in flags (Qwen3.8 at
+    64K versus the 32K spec-decode variant), so the context length is reported
+    too — without it a measurement cannot be attributed to the right profile.
+    """
     out: list[dict] = []
     for p in psutil.process_iter(["name", "cmdline", "memory_info"]):
         try:
@@ -64,8 +69,15 @@ def llama_server_procs() -> list[dict]:
                 continue
             cmdline = p.info["cmdline"] or []
             gguf = next((a for a in cmdline if a.endswith(".gguf")), "")
-            out.append({"pid": p.pid, "rss": p.info["memory_info"].rss, "gguf": gguf})
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            ctx = None
+            for flag in ("--ctx-size", "-c"):
+                if flag in cmdline:
+                    value = cmdline[cmdline.index(flag) + 1 :][:1]
+                    if value and value[0].isdigit():
+                        ctx = int(value[0])
+                        break
+            out.append({"pid": p.pid, "rss": p.info["memory_info"].rss, "gguf": gguf, "ctx": ctx})
+        except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
             continue
     return out
 

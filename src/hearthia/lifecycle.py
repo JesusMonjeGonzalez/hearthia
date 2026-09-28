@@ -4,6 +4,7 @@ import asyncio
 import logging
 import subprocess
 import time
+from typing import TYPE_CHECKING
 
 import psutil
 
@@ -13,6 +14,9 @@ from hearthia.registry import Registry
 from hearthia.telemetry import Telemetry
 
 _ROLE_GRACE_SECONDS = 300
+
+if TYPE_CHECKING:
+    from hearthia.budget import MemoryPolicy
 
 log = logging.getLogger("hearthia.lifecycle")
 
@@ -53,6 +57,7 @@ class LifecycleEngine:
         rules: dict[str, str],
         memory_mode: str = "enforce",
         calibration: CalibrationStore | None = None,
+        policy: "MemoryPolicy | None" = None,
     ) -> None:
         self._gw = gw
         self._reg = reg
@@ -60,6 +65,7 @@ class LifecycleEngine:
         self._rules = rules
         self._memory_mode = memory_mode
         self._calibration = calibration
+        self._policy = policy
         self._loading: set[str] = set()
         self._prev_role_alive: dict[str, bool] = {}
         self._role_died_at: dict[str, float] = {}
@@ -90,6 +96,7 @@ class LifecycleEngine:
                     await self._gw.inventory(),
                     mode=self._memory_mode,
                     calibration=self._calibration,
+                    policy=self._policy,
                 )
                 if not decision.allowed:
                     log.warning(

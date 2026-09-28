@@ -108,6 +108,87 @@ class Gateway:
         r.raise_for_status()
         return r.json()
 
+    def _endpoint(self, path: str, model: str | None) -> str:
+        # llama-swap does not proxy /tokenize or /apply-template at the root,
+        # but does expose them under /upstream/<model>/…; the direct path is
+        # kept for stacks that front llama-server without a proxy.
+        return f"{self.base_url}/upstream/{model}/{path}" if model else f"{self.base_url}/{path}"
+
+    async def tokenize(self, text: str, model: str | None = None) -> int | None:
+        """Exact token count for ``text``, or None when the server cannot say.
+
+        Never raises: a missing endpoint or an unreachable server falls back
+        to the byte estimate in ``context_budget`` instead of failing a turn.
+        """
+        try:
+            r = await self._client.post(
+                self._endpoint("tokenize", model),
+                json={"content": text},
+                timeout=httpx.Timeout(15.0, connect=2.0),
+            )
+            if r.status_code != 200:
+                return None
+            tokens = r.json().get("tokens")
+            return len(tokens) if isinstance(tokens, list) else None
+        except Exception:  # noqa: BLE001 — optional measurement, never fatal
+            return None
+
+    async def apply_template(self, messages: list[dict], model: str | None = None) -> str | None:
+        """Render messages with the model's own chat template, when supported."""
+        try:
+            r = await self._client.post(
+                self._endpoint("apply-template", model),
+                json={"messages": messages},
+                timeout=httpx.Timeout(15.0, connect=2.0),
+            )
+            if r.status_code != 200:
+                return None
+            prompt = r.json().get("prompt")
+            return prompt if isinstance(prompt, str) else None
+        except Exception:  # noqa: BLE001 — optional measurement, never fatal
+            return None
+
+    async def ping(self, model: str) -> bool:
+        """One-token completion through the proxy, to refresh llama-swap's TTL.
+
+        Proxied requests are what reset the activity timer; a health probe may
+        not count. With ``cache_prompt`` the cost is a cache hit plus a single
+        decoded token, so it is cheap enough to run while long tools execute.
+        """
+        try:
+            r = await self._client.post(
+                f"{self.base_url}/v1/chat/completions",
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": "keepalive"}],
+                    "max_tokens": 1,
+                    "stream": False,
+                    "cache_prompt": True,
+                },
+                timeout=httpx.Timeout(30.0, connect=2.0),
+            )
+            return r.status_code == 200
+        except Exception:  # noqa: BLE001 — a failed ping must never fail a turn
+            return False
+
+    async def chat_once(self, body: bytes) -> dict:
+        """One non-streaming completion, used by subagents.
+
+        Simpler than SSE parsing for a nested loop, and it still carries
+        ``timings``/``usage`` so subagent inference is accounted honestly.
+        """
+        response = await self._client.post(
+            f"{self.base_url}/v1/chat/completions",
+            content=body,
+            headers={"Content-Type": "application/json"},
+            timeout=httpx.Timeout(600.0, connect=300.0),
+        )
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict):
+            raise ValueError("gateway returned a non-object completion")
+        return data
+
     async def chat_stream(self, body: bytes) -> AsyncIterator[bytes]:
         async with self._client.stream(
             "POST",
@@ -116,5 +197,6 @@ class Gateway:
             headers={"Content-Type": "application/json"},
             timeout=httpx.Timeout(600.0, connect=300.0),
         ) as r:
+            r.raise_for_status()
             async for chunk in r.aiter_bytes():
                 yield chunk

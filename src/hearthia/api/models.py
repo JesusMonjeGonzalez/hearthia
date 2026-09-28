@@ -7,7 +7,7 @@ from pathlib import Path
 import psutil
 from fastapi import APIRouter, HTTPException, Request
 
-from hearthia.budget import budget_summary, plan_warm_now
+from hearthia.budget import budget_summary, plan_warm_now, policy_from_memory
 from hearthia.load_time import LoadTimeLedger
 from hearthia.power import read_power_state
 from hearthia.provenance import read_provenance
@@ -46,6 +46,8 @@ async def status(request: Request):
     vm = psutil.virtual_memory()
     swap_mem = psutil.swap_memory()
     disk = shutil.disk_usage(str(s.paths.models_dir))
+    jobs = getattr(request.app.state, "jobs", None)
+    hooks = getattr(request.app.state, "hooks", None)
 
     running: list = []
     swap_up = await gw.is_up()
@@ -86,10 +88,26 @@ async def status(request: Request):
             "ram_available": vm.available,
             "ram_percent": vm.percent,
             "swap_used": swap_mem.used,
+            "swap_total": swap_mem.total,
             "cpu_percent": psutil.cpu_percent(interval=None),
             "disk_free": disk.free,
+            # Every memory figure above was sampled at this instant, so the UI
+            # can show how fresh the data is instead of implying it is live.
+            "sampled_at": time.time(),
+        },
+        "memory_policy": {
+            "mode": s.memory.mode if s.memory else "enforce",
+            "max_large_models": s.memory.max_large_models if s.memory else 1,
+            "helper_max_mib": s.memory.helper_max_mib if s.memory else 3072,
+            "os_reserve_mib": s.memory.os_reserve_mib if s.memory else 6144,
+            "swap_warn_mib": s.memory.swap_warn_mib if s.memory else 512,
         },
         "time": time.time(),
+        # Lets `hearth doctor` (and you) notice a daemon running stale code
+        # after an update: the fix is a restart, not a mystery.
+        "version": __import__("hearthia").__version__,
+        "jobs_running": len(jobs.running()) if jobs is not None else 0,
+        "hooks_configured": len(hooks.configured()) if hooks is not None else 0,
     }
 
 
@@ -335,6 +353,7 @@ async def load_model(model_id: str, request: Request):
         mode=s.memory.mode if s.memory else "enforce",
         calibration=getattr(request.app.state, "calibration", None),
         power=read_power_state(),
+        policy=policy_from_memory(s.memory),
     )
     if not decision.allowed:
         raise HTTPException(409, decision.blocked_reason)

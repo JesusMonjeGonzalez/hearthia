@@ -22,7 +22,13 @@ from typing import Any
 import httpx
 
 from hearthia import __version__
-from hearthia.budget import advise_fit, plan_set, plan_warm_now, running_resident
+from hearthia.budget import (
+    advise_fit,
+    plan_set,
+    plan_warm_now,
+    policy_from_memory,
+    running_resident,
+)
 from hearthia.gateway import Gateway
 from hearthia.loadouts import defined_loadouts, loadout_load
 from hearthia.registry import Registry
@@ -301,6 +307,7 @@ async def _tool_warm(s: Settings, args: dict) -> str:
             model_id,
             await gw.inventory(),
             mode=s.memory.mode if s.memory else "enforce",
+            policy=policy_from_memory(s.memory),
         )
         if not decision.allowed:
             advice = advise_fit(

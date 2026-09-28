@@ -30,6 +30,20 @@
 }
 
 * { box-sizing: border-box; }
+.chat-project-toolbar { flex-wrap: wrap; }
+#chat-workspace { flex: 1; min-width: 180px; }
+#chat-mode-hint, #chat-activity { padding: 4px 12px; overflow-wrap: anywhere; }
+#chat-activity { max-height: 4.5em; overflow: auto; }
+.msg.tool { max-width: 100%; }
+.msg.tool pre { max-height: 320px; overflow: auto; white-space: pre-wrap; }
+.tool-failed summary, .diff-remove { color: var(--danger); }
+.chat-warn { color: #d19a00; }
+.load-error { margin-top: 8px; padding: 6px 8px; border-left: 3px solid var(--danger, #e06c75); background: rgba(224, 108, 117, .08); font-size: .9em; white-space: pre-wrap; }
+.msg.tool-plan summary, .msg.tool-task summary { color: #7aa2f7; }
+.msg.tool-job summary, .msg.tool-mcp summary { color: #9ece6a; }
+#conv-search { width: 100%; margin: 6px 0; padding: 6px 8px; }
+.conv-snippet { display: block; opacity: .75; font-size: .85em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.diff-add { color: var(--ok); }
 html, body { margin: 0; height: 100%; }
 body {
   background: var(--bg);

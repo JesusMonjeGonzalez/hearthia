@@ -8,7 +8,7 @@
 
 <p align="center">
   A Mac-native control plane that turns llama.cpp models into an on-demand local service:<br>
-  load on first use, unload when idle, and <strong>never exceed the unified-memory budget</strong>.<br>
+  load on first use, unload when idle, and <strong>check loads against a unified-memory budget</strong>.<br>
   Built around the models people actually run — Qwen3.8-27B, Gemma, embeddings helpers — on one Apple Silicon Mac.
 </p>
 
@@ -129,12 +129,65 @@ uv run scripts/benchmark.py
 ## What It Includes
 
 - **`hearth` CLI:** status, warm/cool (budget-checked), downloads, service control, logs and diagnostics.
+- **`hearth doctor`:** read-only full-system check (config, files, services, memory
+  fit, disk, DB integrity, MCP servers) with `--json` and a non-zero exit on failure;
+  never loads a model.
+- **`hearth tune`:** read-only speed/cost advice from measured data — spec-decode acceptance,
+  KV vs `--cache-ram`, prompt-cache reuse and observed context peaks.
+- **Residency policy:** one large model at a time, small helpers under a size cap, a non-wired RAM reserve kept free for macOS and every other app, swap-in-use warnings and fail-closed behaviour when the resident set is unknown. Every decision prints its measured inputs. See [`docs/MEMORY-POLICY.md`](docs/MEMORY-POLICY.md).
 - **Dashboard:** model cards, memory map, TTL state, streaming chat, library, config, logs and a read-only TreePact panel.
+- **Persistent project chat:** SQLite transcripts with partial-output recovery, tool history, workspace/AGENTS.md context, paginated browsing, browser-history import and full Markdown export. Filesystem tools run in disposable, cancellable workers. See [`docs/CHAT-HARNESS.md`](docs/CHAT-HARNESS.md).
+- **Cache-friendly prompts and token data:** one packing decision per turn, append-only
+  rounds, volatile project context in the tail so llama.cpp can reuse its prompt cache,
+  llama.cpp `timings` (prefill, `cache_n`, tok/s) surfaced in chat and stored per message,
+  and `?format=json` transcript export for other agents. See [`docs/TOKEN-EFFICIENCY.md`](docs/TOKEN-EFFICIENCY.md).
+- **Cheap edit verification:** edited Python/JSON/TOML is parsed locally; a broken file
+  reaches the model as a compact note in the same round, at no token cost when clean.
+- **Re-reads stay cheap:** a byte-identical file already in the prompt is answered with
+  a note (sha256-checked), not resent; range reads and changed files always read in full.
+- **Search all messages:** SQLite FTS5 across every conversation with highlighted
+  snippets and jump-to-hit; zero model tokens. Falls back to a LIKE scan without FTS5.
+- **Retry, fork and verification:** re-run the last question in a fresh copy, branch any
+  conversation, and see at a glance when a turn edited files without running a check.
+- **Per-edit checks:** run the project's own linter/checker after edits (configurable
+  per extension); passes cost ~10 tokens, failures return bounded diagnostics.
+- **Verification gate:** a plan step cannot be marked done in a turn that edited files
+  without running a command afterwards — warned by default, refused with
+  `require_verification = true`.
+- **Background jobs:** long commands run detached with a log file; the chat polls a
+  bounded tail and can wait or stop them. Bounded count, lifetime, log size and cleanup.
+- **Hot config reload:** `POST /api/config/reload` applies agent/memory/MCP changes with
+  a diff report, without restarting the daemon.
+- **Hooks:** fire-and-forget commands on `turn_end`/`edit` (notifications, formatters)
+  with a JSON payload on stdin — bounded, logged, never in the turn's way.
+- **Optional model compaction:** `[agent] compaction = "model"` keeps a rolling, 200-word
+  model summary of dropped turns (background, bounded, digest as fallback).
+- **Shortcuts and honest errors:** Esc stops a turn, Cmd/Ctrl+K starts a new chat;
+  a down gateway tells you the one command that fixes it.
+- **Usage panel:** tokens per conversation (input vs allowance, totals, growth/turn,
+  projected turns to trimming, last-round cache and tok/s) at zero token cost.
+- **Readable transcript:** every reply shows which model produced it (with tok/s), and
+  `task`/`job`/`plan`/MCP results get structured cards instead of raw text.
+- **Subagents on a small model:** `[agent] subagent_model` offloads exploration to a
+  1.5B helper (RAM-policy-checked, falls back to the main model with a stated reason).
+- **Subagents:** the `task` tool runs read-only exploration in a disposable context
+  and returns a bounded report — file dumps and test logs stay out of the main
+  64K window. See [`docs/SUBAGENTS.md`](docs/SUBAGENTS.md).
+- **Autonomous runs:** plan statuses (`done`) with an `n/m` checklist, an opt-in
+  auto-continue that follows pending steps (capped, interruptible), and digests that keep
+  conclusions when turns are dropped.
+- **Long autonomous sessions:** keepalive against TTL eviction, round/time budgets,
+  a pinned `update_plan` that survives context trimming, and a no-progress guard.
+  See [`docs/LONG-SESSIONS.md`](docs/LONG-SESSIONS.md).
+- **Develop mode:** exact file edits, no-overwrite file creation and foreground commands with real exit codes, bounded output, deadlines and sampled RSS limits. Review diffs and test results in the transcript. See [`docs/CODING-AGENT.md`](docs/CODING-AGENT.md).
 - **Lifecycle daemon:** observes gateway events, followers and crash loops.
 - **Round-trip configuration:** edits `llama-swap.yaml` without destroying comments and rotates backups.
 - **Local Brain:** indexes an optional Obsidian vault with sqlite-vec and local embeddings.
 - **Loopback-only services:** the daemon rejects non-loopback binds and rejects foreign browser origins.
 - **MCP server:** agents (OpenCode, Zed, Claude…) manage warm/cool/est/Brain search themselves — budget-enforced. See [`docs/MCP.md`](docs/MCP.md).
+- **MCP client:** the chat consumes tools from your own stdio MCP servers, namespaced as
+  `mcp__<server>__<tool>`, opt-in via `[mcp.servers.*]`, with deadlines, bounded schemas/output
+  and read-only servers visible to Consult mode. See [`docs/MCP-CLIENT.md`](docs/MCP-CLIENT.md).
 - **TreePact facade:** humans can launch governed coding-agent runs through
   `hearth treepact` and review status, diffs and evidence through bounded
   read-only commands. The dashboard's **TreePact** tab and `GET
@@ -247,6 +300,18 @@ one-line installer at [`packaging/install.sh`](packaging/install.sh):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/JesusMonjeGonzalez/hearthia/main/packaging/install.sh | sh
 ```
+
+## One command to the agent
+
+```bash
+hearth chat -m qwen3.8-27b-rvn -w ~/my-project        # warm + open the chat, preselected
+hearth chat --no-warm --no-open                        # just print the deep link
+```
+
+`hearth chat` starts whatever is not running, waits for the daemon, preloads
+the model through the RAM gate (alias-resolved, skipped with `--no-warm`;
+`[chat] default_model` sets the default) and opens the dashboard deep-linked
+so the chat tab, project directory, model and mode are already set.
 
 ## Everyday Use
 
@@ -383,6 +448,7 @@ Model:    an ID or alias from llama-swap.yaml
 | `~/.hearthia/logs/` | Gateway, daemon and update logs |
 | `~/.hearthia/backups/` | Rotating YAML backups |
 | `~/.hearthia/*.json` | Learned state: RAM calibration, token usage, load-time ETA, sessions, drift fingerprints, last-used tracking |
+| `~/.hearthia/conversations.sqlite3` | Persistent chat transcripts, tools, workspace settings and partial replies |
 | TreePact's own data directory | Pacts, runs, worktrees and evidence; not managed by Hearthia |
 
 `HEARTHIA_CONFIG` selects another TOML file. Nested settings can also be
@@ -393,8 +459,8 @@ overridden with variables such as `HEARTHIA_MEMORY__MODE=warn`.
 - Hearthia is a **single-user local tool**, not a multi-user server.
 - Services are enforced to loopback and do not implement user authentication; remote binding is rejected.
 - The MCP server is stdio-only (no network listener) and inherits this same local single-user boundary; its warm tools enforce the RAM budget gate.
-- Chat filesystem tools can read/search paths available to the local process; write operations are disabled.
-- Model-fit estimates are header-derived and conservative, but the wired-limit ceiling is the enforced guarantee — verify real memory pressure when using `--force`.
+- Consult mode can read/search paths available to the local process. Explicit Develop mode enables workspace file edits and local commands; commands run with the user's permissions and are not sandboxed.
+- Model-fit estimates are header-derived and checked before managed loads; they are not an OS-level memory guarantee. Direct gateway clients and concurrent loading surfaces still need coordinated admission.
 - Model behavior and compatibility depend on the installed llama.cpp/llama-swap versions.
 
 ## Development And Evidence
@@ -416,12 +482,38 @@ smoke test requires a live daemon and a Playwright browser installation:
 uvx --from playwright python tests/e2e/smoke.py
 ```
 
+## Documentation
+
+| Document | What it covers |
+|---|---|
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Modules, data flow, where state lives |
+| [CHAT-HARNESS.md](docs/CHAT-HARNESS.md) | Durable conversations, retry/fork, search, verification marker |
+| [CODING-AGENT.md](docs/CODING-AGENT.md) | Develop mode: exact edits, commands, per-edit checks, PATH |
+| [LONG-SESSIONS.md](docs/LONG-SESSIONS.md) | Keepalive, budgets, plans, background jobs, hooks, compaction |
+| [SUBAGENTS.md](docs/SUBAGENTS.md) | `task`: disposable-context exploration |
+| [TOKEN-EFFICIENCY.md](docs/TOKEN-EFFICIENCY.md) | Prompt elements, measured costs, cache reuse, fill projections |
+| [MEMORY-POLICY.md](docs/MEMORY-POLICY.md) | One large model, OS reserve, swap, measured 64K numbers |
+| [MCP.md](docs/MCP.md) / [MCP-CLIENT.md](docs/MCP-CLIENT.md) | Hearthia as a server / as a client |
+| [TREEPACT.md](docs/TREEPACT.md) | The read-only TreePact facade |
+| [RECIPES.md](docs/RECIPES.md) | Task-oriented recipes |
+| [ROADMAP.md](docs/ROADMAP.md) | What is planned next |
+| [AGENT-READINESS-2026-09-28.md](docs/AGENT-READINESS-2026-09-28.md) | Independent assessment vs Pi/Crush and the closing plan |
+| [PUBLIC-RELEASE-STATUS.md](docs/PUBLIC-RELEASE-STATUS.md) | Release state and what is still open |
+
 ## Current Limits
+
+For the coding-agent assessment, current chat resource limits and the path toward
+a Pi/Crush-style daily workflow, see
+[`docs/AGENT-READINESS-2026-09-28.md`](docs/AGENT-READINESS-2026-09-28.md).
+Chat now checks the memory budget before each inference round and accepts one
+active turn per daemon. It uses bounded filesystem context instead of automatically
+building a semantic code index when a project path is mentioned.
 
 - macOS, Apple Silicon and launchd only.
 - No authentication or remote multi-user deployment model; this is intentionally a local single-user tool.
 - Real model loading is not exercised by unit CI.
-- The budget gate blocks on GGUF-header maths; models with unreadable headers fall back to a file-size guess with a warning instead of a hard guarantee.
+- The budget gate blocks on GGUF-header maths; models with unreadable headers fall back to a file-size guess with a warning instead of a hard guarantee. The MTP/spec-decode draft cache is not modelled until calibration has measured that model.
+- The residency policy governs Hearthia's own warm path (CLI, daemon, MCP, loadouts, chat). Anything talking to llama-swap directly on port 9292 bypasses it.
 - No signed binary release; installation currently uses Python tooling and Homebrew.
 
 See [`CHANGELOG.md`](CHANGELOG.md) for implemented milestones and

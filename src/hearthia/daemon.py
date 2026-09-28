@@ -10,11 +10,28 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from hearthia.api import brain, chat, config, context, library, logs, models, treepact
+from hearthia.api import (
+    brain,
+    chat,
+    config,
+    context,
+    conversations,
+    hooks,
+    jobs,
+    library,
+    logs,
+    models,
+    treepact,
+)
+from hearthia.budget import policy_from_memory
 from hearthia.calibration import CalibrationRecorder, CalibrationStore
+from hearthia.conversations import ConversationStore
 from hearthia.drift import DriftTracker
 from hearthia.gateway import Gateway
+from hearthia.hooks import HookRunner
+from hearthia.jobs import JobRegistry
 from hearthia.lifecycle import LifecycleEngine
+from hearthia.mcp_client import McpManager
 from hearthia.registry import Registry
 from hearthia.sessions import SessionHistory
 from hearthia.settings import Settings
@@ -98,10 +115,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings.lifecycle,
         memory_mode=settings.memory.mode,
         calibration=calibration,
+        policy=policy_from_memory(settings.memory),
     )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        app.state.conversations.recover()
+        app.state.jobs.reap_stale()
         tasks = [
             asyncio.create_task(tel.run_event_watcher()),
             asyncio.create_task(tel.run_metrics_poller()),
@@ -121,6 +141,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             sleep_guard.stop()
+            await app.state.hooks.close()
+            await app.state.jobs.close()
+            await app.state.mcp.close()
             await gw.close()
             log.info("hearthd stopped")
 
@@ -136,6 +159,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.spec_decode_ledger = spec_decode_ledger
     app.state.sleep_guard = sleep_guard
     app.state.last_used = last_used
+    app.state.conversations = ConversationStore(settings.paths.stack_dir / "conversations.sqlite3")
+    app.state.hooks = HookRunner(list(settings.agent.hooks))
+    app.state.mcp = McpManager(settings.mcp.servers)
+    app.state.jobs = JobRegistry(
+        settings.paths.stack_dir / "jobs",
+        max_jobs=settings.agent.max_jobs,
+        max_minutes=settings.agent.job_max_minutes,
+        log_retention_days=settings.agent.job_log_retention_days,
+    )
 
     allowed_origins = {
         f"http://{settings.daemon.bind}:{settings.daemon.port}",
@@ -154,6 +186,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(models.router)
     app.include_router(config.router)
     app.include_router(chat.router)
+    app.include_router(conversations.router)
+    app.include_router(jobs.router)
+    app.include_router(hooks.router)
     app.include_router(logs.router)
     app.include_router(brain.router)
     app.include_router(context.router)

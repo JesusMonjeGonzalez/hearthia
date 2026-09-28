@@ -230,3 +230,47 @@ def test_recorder_on_drift_callback_failure_does_not_crash_tick(tmp_path, monkey
     monkeypatch.setattr(drift, "check", lambda mid, path: True)
 
     recorder.tick()  # must not raise
+
+
+def _shared_file_models(tmp_path):
+    """Two profiles serving one GGUF, as Qwen3.8 and its spec-decode variant do."""
+    from dataclasses import replace
+
+    weights = tmp_path / "shared.gguf"
+    weights.write_bytes(b"\0" * 1024)
+    base = _model("shared-64k", file=weights)
+    return [base, replace(base, id="shared-32k", ctx=8192)], weights
+
+
+def test_recorder_attributes_a_shared_gguf_by_context(tmp_path, monkeypatch):
+    models, weights = _shared_file_models(tmp_path)
+    store = CalibrationStore(tmp_path / "calibration.json")
+    recorder = CalibrationRecorder(_FakeRegistry(models), store, settle_seconds=0.0)
+    monkeypatch.setattr("hearthia.budget.profile_for", lambda m: _PROFILE)
+    monkeypatch.setattr(
+        "hearthia.telemetry.llama_server_procs",
+        lambda: [{"pid": 1, "rss": 1 * GIB, "gguf": str(weights), "ctx": 8192}],
+    )
+    recorder.tick()
+    recorder.tick()
+
+    # The measurement belongs to the profile actually running, not its twin.
+    assert store.entry("shared-32k") is not None
+    assert store.entry("shared-64k") is None
+
+
+def test_recorder_records_nothing_when_the_context_cannot_disambiguate(tmp_path, monkeypatch):
+    models, weights = _shared_file_models(tmp_path)
+    models[1] = _model("shared-twin", file=weights)  # same ctx as shared-64k
+    store = CalibrationStore(tmp_path / "calibration.json")
+    recorder = CalibrationRecorder(_FakeRegistry(models), store, settle_seconds=0.0)
+    monkeypatch.setattr("hearthia.budget.profile_for", lambda m: _PROFILE)
+    for proc in (
+        {"pid": 1, "rss": 1 * GIB, "gguf": str(weights), "ctx": 32768},  # two matches
+        {"pid": 1, "rss": 1 * GIB, "gguf": str(weights), "ctx": None},  # no ctx reported
+        {"pid": 1, "rss": 1 * GIB, "gguf": str(weights), "ctx": 4096},  # matches neither
+    ):
+        monkeypatch.setattr("hearthia.telemetry.llama_server_procs", lambda proc=proc: [proc])
+        recorder.tick()
+
+    assert store.snapshot() == {}

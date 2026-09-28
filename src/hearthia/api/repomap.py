@@ -8,7 +8,7 @@ tree + README/manifest previews up front removes the 2-3 discovery rounds
 import re
 from pathlib import Path
 
-from hearthia.api.tools import JUNK_DIRS, _fmt_size
+from hearthia.api.tools import JUNK_DIRS, _fmt_size, _read_prefix
 
 _DEFAULT_BUDGET = 4000
 _PREVIEW_LINES = 30
@@ -102,9 +102,9 @@ def _previews(root: Path) -> str:
     for f in files:
         if f.name.lower().startswith("readme") or f.name in _MANIFESTS:
             try:
-                head = "\n".join(
-                    f.read_text(encoding="utf-8", errors="replace").splitlines()[:_PREVIEW_LINES]
-                )[:_PREVIEW_CHARS]
+                head = "\n".join(_read_prefix(f, _PREVIEW_CHARS).splitlines()[:_PREVIEW_LINES])[
+                    :_PREVIEW_CHARS
+                ]
             except OSError:
                 continue
             out.append(f"--- {f.name} ---\n{head}")
@@ -132,5 +132,7 @@ def build_repo_map(root: Path, budget: int = _DEFAULT_BUDGET) -> str:
     out = f"Project map of {root} (auto-generated):\n" + "\n".join(tree)
     if previews:
         out += f"\n\n{previews}"
+    if len(_cache) >= 16 and str(root) not in _cache:
+        del _cache[next(iter(_cache))]
     _cache[str(root)] = (sig, out)
     return out

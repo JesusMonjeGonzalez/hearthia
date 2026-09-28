@@ -180,6 +180,30 @@ class CalibrationRecorder:
         self._first_seen: dict[str, float] = {}
         self._recorded: set[str] = set()
 
+    @staticmethod
+    def _attribute(candidates: list, proc: dict):
+        """Pick the profile a measured process belongs to, or ``None``.
+
+        Several profiles can share one GGUF; attributing a measurement to the
+        wrong one teaches the budget gate a correction for a context length that
+        was never running. When the context cannot disambiguate them, no sample
+        is recorded — a missing correction is safe, a wrong one is not.
+        """
+        if len(candidates) == 1:
+            return candidates[0]
+        if not candidates or proc.get("ctx") is None:
+            return None
+        matching = [m for m in candidates if m.ctx == proc["ctx"]]
+        if len(matching) != 1:
+            log.debug(
+                "not attributing RSS for %s: %d profiles share it at ctx %s",
+                proc.get("gguf", "?"),
+                len(matching),
+                proc["ctx"],
+            )
+            return None
+        return matching[0]
+
     def tick(self) -> None:
         # imported lazily: budget.py already depends on gguf/library, and this
         # keeps calibration.py importable from budget.py without a cycle
@@ -187,11 +211,14 @@ class CalibrationRecorder:
         from hearthia.telemetry import llama_server_procs
 
         procs = llama_server_procs()
-        by_file = {m.file.name: m for m in self._reg.models() if m.file}
+        by_file: dict[str, list] = {}
+        for m in self._reg.models():
+            if m.file:
+                by_file.setdefault(m.file.name, []).append(m)
         seen_now: set[str] = set()
         now = time.time()
         for p in procs:
-            model = by_file.get(Path(p["gguf"]).name)
+            model = self._attribute(by_file.get(Path(p["gguf"]).name, []), p)
             if model is None or not p["rss"]:
                 continue
             seen_now.add(model.id)
