@@ -18,7 +18,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
       - name: Verify the suite before tagging a release
@@ -50,6 +50,8 @@ jobs:
         with:
           name: distributions
           path: dist
+      # `dist/*` also matched the .gitignore that `uv build` writes, and the
+      # release API rejected the duplicate asset name. Name the artefacts.
       - name: Attach distributions to the GitHub release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         env:

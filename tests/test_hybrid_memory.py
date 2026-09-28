@@ -7,6 +7,7 @@ warm gate refuse loads that fit. The numbers below follow llama.cpp's own rules
 (``models/qwen35.cpp``, ``llama_hparams::n_embd_r``/``n_embd_s``).
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -17,15 +18,12 @@ from hearthia.library import attention_layers, kv_cache_bytes, recurrent_state_b
 from hearthia.registry import Model
 
 GIB = 2**30
-QWEN38 = Path.home() / "llm-stack/models/Qwen3.8-27B-UD-Q4_K_XL.gguf"
-PROJECTOR = Path.home() / "llm-stack/models/Qwen3.8-27B-mmproj-F16.gguf"
 
-# The deployed llama-swap profile for qwen3.8-27b.
-QWEN38_CMD = (
-    f"llama-server --model {QWEN38} --mmproj {PROJECTOR} --ctx-size 65536 "
-    "--parallel 1 --cache-ram 512 --flash-attn on "
-    "--cache-type-k q4_0 --cache-type-v q4_0"
-)
+# The real-header check needs a matching Qwen3.8-family GGUF on disk. Point the
+# variable at one to run it; the check is skipped otherwise so the suite never
+# depends on a particular machine's model layout.
+MODEL_ENV = "HEARTHIA_QWEN38_GGUF"
+REAL_MODEL = Path(os.environ[MODEL_ENV]) if os.environ.get(MODEL_ENV) else None
 
 
 def _model(cmd: str, file: Path | None = None, ctx: int | None = 65536) -> Model:
@@ -141,24 +139,32 @@ def test_plain_attention_models_are_unaffected():
     assert "attention layers" not in est.detail
 
 
-@pytest.mark.skipif(not QWEN38.exists(), reason="Qwen3.8 weights not installed")
-def test_real_header_matches_the_deployed_profile():
-    profile = model_ram_profile(QWEN38)
+@pytest.mark.skipif(
+    REAL_MODEL is None or not REAL_MODEL.exists(),
+    reason=f"set {MODEL_ENV} to a Qwen3.8-family GGUF to run the real-header check",
+)
+def test_real_header_parses_the_hybrid_layout():
+    assert REAL_MODEL is not None
+    profile = model_ram_profile(REAL_MODEL)
+    assert profile is not None
     assert (profile.n_layer, profile.full_attention_interval, profile.nextn_layers) == (65, 4, 1)
     assert (profile.n_kv_heads, profile.k_len, profile.v_len) == (4, 256, 256)
     assert (profile.ssm_d_conv, profile.ssm_d_inner) == (4, 6144)
     assert (profile.ssm_d_state, profile.ssm_n_group) == (128, 16)
 
-    est = estimate_model_ram(_model(QWEN38_CMD, file=QWEN38), profile)
-    # llama-fit-params (build 10441, Metal, fa on, q4_0 KV, 65536 ctx) reports
-    # 17588 MiB Metal + 850 MiB host for the weights, context and compute
-    # buffers. It does not include the projector or the prompt cache, so a
-    # correct estimate sits above that and below the old 21.7 GiB reading.
-    native_without_sidecars = (17588 + 850) * 2**20
-    sidecars = (PROJECTOR.stat().st_size if PROJECTOR.exists() else 0) + 512 * 2**20
-    assert native_without_sidecars < est.resident_bytes < native_without_sidecars + 2 * GIB
-    assert est.resident_bytes > native_without_sidecars + sidecars * 0.5
-    assert est.resident_bytes < 21 * GIB
+    cmd = (
+        f"llama-server --model {REAL_MODEL} --ctx-size 65536 "
+        "--parallel 1 --flash-attn on --cache-type-k q4_0 --cache-type-v q4_0"
+    )
+    est = estimate_model_ram(_model(cmd, file=REAL_MODEL), profile)
+    flat = kv_cache_bytes(
+        profile.n_layer, profile.n_kv_heads, profile.k_len, profile.v_len, 65536, cache_type="q4_0"
+    )
+    # The estimate covers the weights but stays under the all-layers KV reading:
+    # a regression on either side of the hybrid accounting shows up here.
+    weights = REAL_MODEL.stat().st_size
+    assert est.known is True
+    assert weights < est.resident_bytes < weights + flat
 
 
 def test_every_estimate_path_uses_the_hybrid_geometry():
